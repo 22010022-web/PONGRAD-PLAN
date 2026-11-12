@@ -70,7 +70,7 @@ export default function DashboardPage() {
               แดชบอร์ดสารสนเทศและนิเทศแผนการจัดการเรียนรู้
             </h1>
             <p className="text-sm text-slate-600 mt-1">
-              ระบบตรวจสอบ ป้องกันการลักไก่ผ่านงานด้วย Supabase Role-Based Security และจัดเก็บไฟล์ Google Drive
+              ระบบสารสนเทศติดตามความก้าวหน้าและการนิเทศแผนการจัดการเรียนรู้ที่มีประสิทธิภาพและเป็นมาตรฐาน
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
