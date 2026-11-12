@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useAuth } from "@/context/auth-context";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
 import { LessonPlan, Teacher } from "@/types/database";
 import { FileText, CheckCircle2, Clock, AlertCircle, FileCheck, Search, Filter } from "lucide-react";
 
 export default function DashboardPage() {
+  const { user } = useAuth();
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -73,14 +75,16 @@ export default function DashboardPage() {
               ระบบสารสนเทศติดตามความก้าวหน้าและการนิเทศแผนการจัดการเรียนรู้ที่มีประสิทธิภาพและเป็นมาตรฐาน
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/submit"
-              className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all"
-            >
-              + ส่งแผนการสอนใหม่
-            </Link>
-          </div>
+          {user && (
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/submit"
+                className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all"
+              >
+                + ส่งแผนการสอนใหม่
+              </Link>
+            </div>
+          )}
         </div>
       </div>
 
