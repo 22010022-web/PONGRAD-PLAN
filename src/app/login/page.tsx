@@ -166,7 +166,7 @@ export default function LoginPage() {
           PR
         </div>
         <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-800">
-          ระบบบริหารจัดการและนิเทศแผน
+          ระบบติดตามภาระงานการส่งแผน
         </h1>
         <p className="text-xs text-slate-500 mt-1">โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)</p>
       </div>

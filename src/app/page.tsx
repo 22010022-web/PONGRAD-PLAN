@@ -67,7 +67,7 @@ export default function DashboardPage() {
               <span>โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold font-display text-slate-800">
-              แดชบอร์ดสารสนเทศและนิเทศแผนการจัดการเรียนรู้
+              ระบบติดตามภาระงานการส่งแผนการจัดการเรียนรู้และบันทึกหลังสอน
             </h1>
             <p className="text-sm text-slate-600 mt-1">
               ระบบสารสนเทศติดตามความก้าวหน้าและการนิเทศแผนการจัดการเรียนรู้ที่มีประสิทธิภาพและเป็นมาตรฐาน
