@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS public.plan_reviews (
 CREATE TABLE IF NOT EXISTS public.school_settings (
     id TEXT PRIMARY KEY DEFAULT 'default',
     school_name TEXT NOT NULL DEFAULT 'โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)',
-    system_title TEXT NOT NULL DEFAULT 'ระบบติดตามแผนการสอนและบันทึกหลังสอน',
+    system_title TEXT NOT NULL DEFAULT 'ระบบส่งแผนการสอนออนไลน์',
     logo_url TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -94,7 +94,7 @@ INSERT INTO public.school_settings (id, school_name, system_title)
 VALUES (
     'default',
     'โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)',
-    'ระบบติดตามแผนการสอนและบันทึกหลังสอน'
+    'ระบบส่งแผนการสอนออนไลน์'
 ) ON CONFLICT (id) DO NOTHING;
 
 -- 3. Initial Seed Data (ข้อมูลครูทั้ง 9 ท่าน)

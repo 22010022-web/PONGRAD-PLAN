@@ -8,7 +8,7 @@ import { Profile, SchoolSettings, Teacher, UserRole } from "@/types/database";
 const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
   id: "default",
   school_name: "โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)",
-  system_title: "ระบบติดตามแผนการสอนและบันทึกหลังสอน",
+  system_title: "ระบบส่งแผนการสอนออนไลน์",
   logo_url: null,
 };
 

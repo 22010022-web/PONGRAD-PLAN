@@ -172,7 +172,7 @@ export default function LoginPage() {
             PR
           </div>
         )}
-        <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-800">
+        <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-800 text-balance">
           {schoolSettings.system_title}
         </h1>
         <p className="text-xs text-slate-500 mt-1">{schoolSettings.school_name}</p>
