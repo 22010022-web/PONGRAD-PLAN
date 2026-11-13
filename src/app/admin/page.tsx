@@ -163,7 +163,7 @@ export default function AdminPage() {
           id: "default",
           school_name: schoolName.trim() || "โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)",
           system_title:
-            systemTitle.trim() || "ระบบติดตามภาระงานการส่งแผนการจัดการเรียนรู้และบันทึกหลังสอน",
+            systemTitle.trim() || "ระบบติดตามแผนการสอนและบันทึกหลังสอน",
           logo_url: logoUrl.trim() || null,
           updated_at: new Date().toISOString(),
         },
