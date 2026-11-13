@@ -82,9 +82,27 @@ export async function uploadPdfToGoogleDrive(
         }
         reject(new Error("อัปโหลดเสร็จแล้ว แต่ไม่ได้รับ File ID จาก Google Drive"));
       } else {
+        let detail = "";
+        try {
+          const parsed = JSON.parse(xhr.responseText || "{}");
+          const msg = String(parsed?.error?.message || "");
+          const reason = String(parsed?.error?.errors?.[0]?.reason || "");
+          if (reason === "storageQuotaExceeded" || /storage quota/i.test(msg)) {
+            detail =
+              "Service Account ไม่มีพื้นที่เก็บไฟล์ของตัวเอง — โฟลเดอร์ต้องอยู่ใน 'ไดรฟ์ที่แชร์ (Shared Drive)' พร้อมสิทธิ์ 'ผู้จัดการเนื้อหา' หรือใช้ OAuth2 (GOOGLE_OAUTH_REFRESH_TOKEN)";
+          } else if (msg) {
+            detail = reason ? `[${reason}] ${msg}` : msg;
+          }
+        } catch {
+          if (xhr.responseText && xhr.responseText.length < 200) {
+            detail = xhr.responseText.trim();
+          }
+        }
         reject(
           new Error(
-            `อัปโหลดไปยัง Google Drive ไม่สำเร็จ (HTTP ${xhr.status})`
+            detail
+              ? `อัปโหลดไปยัง Google Drive ไม่สำเร็จ (HTTP ${xhr.status}): ${detail}`
+              : `อัปโหลดไปยัง Google Drive ไม่สำเร็จ (HTTP ${xhr.status})`
           )
         );
       }

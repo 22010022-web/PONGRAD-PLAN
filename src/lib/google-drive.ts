@@ -98,7 +98,30 @@ function getCredentials(): { client_email: string; private_key: string } {
   );
 }
 
+export function isUsingOAuthDrive(): boolean {
+  return Boolean(
+    process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() &&
+      process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim() &&
+      process.env.GOOGLE_OAUTH_REFRESH_TOKEN?.trim()
+  );
+}
+
 let cachedAuth: InstanceType<typeof gauth.GoogleAuth> | null = null;
+let cachedOAuthKey = "";
+let cachedOAuthClient: InstanceType<typeof gauth.OAuth2> | null = null;
+
+function getOAuthClient() {
+  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID!.trim();
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET!.trim();
+  const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN!.trim();
+  const key = `${clientId}:${refreshToken.slice(-8)}`;
+  if (!cachedOAuthClient || cachedOAuthKey !== key) {
+    cachedOAuthClient = new gauth.OAuth2(clientId, clientSecret);
+    cachedOAuthClient.setCredentials({ refresh_token: refreshToken });
+    cachedOAuthKey = key;
+  }
+  return cachedOAuthClient;
+}
 
 export function getGoogleAuth() {
   if (!cachedAuth) {
@@ -108,11 +131,14 @@ export function getGoogleAuth() {
 }
 
 export function getDrive() {
+  if (isUsingOAuthDrive()) {
+    return driveApi({ version: "v3", auth: getOAuthClient() });
+  }
   return driveApi({ version: "v3", auth: getGoogleAuth() });
 }
 
 export async function getAccessToken(): Promise<string> {
-  const client = await getGoogleAuth().getClient();
+  const client = isUsingOAuthDrive() ? getOAuthClient() : await getGoogleAuth().getClient();
   const res = await client.getAccessToken();
   const token = typeof res === "string" ? res : res?.token;
   if (!token) throw new Error("ไม่สามารถขอ Access Token จาก Google ได้");
