@@ -59,7 +59,11 @@ export default function ReviewPage() {
       let finalReviewedFileId: string | null = null;
 
       // หาก ผอ. เซ็นชื่อ E-Signature บนหน้าเว็บ ให้นำลายเซ็นไปฝังลงใน PDF และอัปโหลดกลับไปที่ Google Drive
-      if (signatureDataUrl && statusAssigned !== "แผนต้องแก้ไข") {
+      if (
+        signatureDataUrl &&
+        statusAssigned !== "แผนต้องแก้ไข" &&
+        statusAssigned !== "บันทึกต้องแก้ไข"
+      ) {
         setMsg({
           type: "success",
           text: "กำลังประทับลายเซ็นลงในไฟล์ PDF และอัปโหลดกลับไปยัง Google Drive...",
@@ -401,34 +405,63 @@ export default function ReviewPage() {
 
             {/* Action Buttons */}
             <div className="space-y-2 pt-2 border-t border-slate-200">
-              <div className="text-xs font-bold text-slate-700">เลือกผลการพิจารณา:</div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={() => handleReviewAction("แผนต้องแก้ไข", "plan")}
-                  className="py-2.5 px-3 rounded-xl border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 text-xs font-bold transition-colors disabled:opacity-50"
-                >
-                  ✎ แผนต้องแก้ไข
-                </button>
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={() => handleReviewAction("แผนผ่าน (รอส่งบันทึก)", "plan")}
-                  className="py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow transition-colors disabled:opacity-50"
-                >
-                  ✔ แผนผ่าน (รอส่งบันทึก)
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-1">
+                <div className="text-xs font-bold text-slate-700">เลือกผลการพิจารณา:</div>
+                <span className="text-[11px] text-slate-500">
+                  * ผอ. ตรวจครั้งเดียว: หากสั่งแก้ไข ครูแก้แล้วส่งแทนไฟล์เดิมจะผ่านอัตโนมัติ
+                </span>
               </div>
 
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={() => handleReviewAction("เสร็จสมบูรณ์", "plan_and_post")}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold shadow hover:shadow-md transition-all disabled:opacity-50"
-              >
-                ✔✔ อนุมัติเสร็จสมบูรณ์ (กรณีมีบันทึกหลังสอนในเล่มแล้ว)
-              </button>
+              {selectedPlan.status === "รอตรวจบันทึก" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => handleReviewAction("บันทึกต้องแก้ไข", "post")}
+                    className="py-2.5 px-3 rounded-xl border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 text-xs font-bold transition-colors disabled:opacity-50"
+                  >
+                    ✎ บันทึกต้องแก้ไข (ครูแก้แทนไฟล์เดิมได้)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => handleReviewAction("เสร็จสมบูรณ์", "post")}
+                    className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold shadow hover:shadow-md transition-all disabled:opacity-50"
+                  >
+                    ✔✔ อนุมัติเสร็จสมบูรณ์
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => handleReviewAction("แผนต้องแก้ไข", "plan")}
+                      className="py-2.5 px-3 rounded-xl border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 text-xs font-bold transition-colors disabled:opacity-50"
+                    >
+                      ✎ แผนต้องแก้ไข (ครูแก้แทนไฟล์เดิมได้)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => handleReviewAction("แผนผ่าน (รอส่งบันทึก)", "plan")}
+                      className="py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow transition-colors disabled:opacity-50"
+                    >
+                      ✔ แผนผ่าน (รอส่งบันทึก)
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => handleReviewAction("เสร็จสมบูรณ์", "plan_and_post")}
+                    className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold shadow hover:shadow-md transition-all disabled:opacity-50"
+                  >
+                    ✔✔ อนุมัติเสร็จสมบูรณ์ (กรณีมีบันทึกหลังสอนในเล่มแล้ว)
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

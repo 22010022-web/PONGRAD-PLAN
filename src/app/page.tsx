@@ -8,7 +8,7 @@ import { LessonPlan, Teacher } from "@/types/database";
 import { FileText, CheckCircle2, Clock, AlertCircle, FileCheck, Search, Filter } from "lucide-react";
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, schoolSettings } = useAuth();
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -62,18 +62,27 @@ export default function DashboardPage() {
       {/* Top Banner */}
       <div className="glass-panel rounded-3xl p-6 sm:p-8 bg-gradient-to-r from-pink-500/10 via-purple-500/10 to-amber-500/10 border border-white/60">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-pink-100 text-pink-700 text-xs font-bold mb-2">
-              <span>ภาคเรียนที่ 2/2569</span>
-              <span>•</span>
-              <span>โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)</span>
+          <div className="flex items-start sm:items-center gap-4">
+            {schoolSettings.logo_url && (
+              <img
+                src={schoolSettings.logo_url}
+                alt="โลโก้โรงเรียน"
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl object-contain bg-white p-1 shadow-md border border-white shrink-0"
+              />
+            )}
+            <div>
+              <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-pink-100 text-pink-700 text-xs font-bold mb-2">
+                <span>ภาคเรียนที่ 2/2569</span>
+                <span>•</span>
+                <span>{schoolSettings.school_name}</span>
+              </div>
+              <h1 className="text-xl sm:text-2xl font-bold font-display text-slate-800">
+                {schoolSettings.system_title}
+              </h1>
+              <p className="text-sm text-slate-600 mt-1">
+                ระบบสารสนเทศติดตามความก้าวหน้าและการนิเทศแผนการจัดการเรียนรู้ที่มีประสิทธิภาพและเป็นมาตรฐาน
+              </p>
             </div>
-            <h1 className="text-xl sm:text-2xl font-bold font-display text-slate-800">
-              ระบบติดตามภาระงานการส่งแผนการจัดการเรียนรู้และบันทึกหลังสอน
-            </h1>
-            <p className="text-sm text-slate-600 mt-1">
-              ระบบสารสนเทศติดตามความก้าวหน้าและการนิเทศแผนการจัดการเรียนรู้ที่มีประสิทธิภาพและเป็นมาตรฐาน
-            </p>
           </div>
           {user && (
             <div className="flex flex-wrap gap-2">

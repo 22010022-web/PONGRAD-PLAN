@@ -3,7 +3,14 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { User } from "@supabase/supabase-js";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
-import { Profile, Teacher, UserRole } from "@/types/database";
+import { Profile, SchoolSettings, Teacher, UserRole } from "@/types/database";
+
+const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
+  id: "default",
+  school_name: "โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)",
+  system_title: "ระบบติดตามภาระงานการส่งแผนการจัดการเรียนรู้และบันทึกหลังสอน",
+  logo_url: null,
+};
 
 function translateAuthError(message: string): string {
   const msg = (message || "").toLowerCase();
@@ -30,7 +37,9 @@ interface AuthContextType {
   isAdmin: boolean;
   isConfigured: boolean;
   isSchemaReady: boolean;
+  schoolSettings: SchoolSettings;
   checkSchema: () => Promise<void>;
+  refreshSchoolSettings: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (
     email: string,
@@ -52,7 +61,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [teacher, setTeacher] = useState<Teacher | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSchemaReady, setIsSchemaReady] = useState<boolean>(true);
+  const [schoolSettings, setSchoolSettings] = useState<SchoolSettings>(DEFAULT_SCHOOL_SETTINGS);
   const isConfigured = isSupabaseConfigured();
+
+  const refreshSchoolSettings = useCallback(async () => {
+    if (!isConfigured) return;
+    try {
+      const { data, error } = await supabase
+        .from("school_settings")
+        .select("*")
+        .eq("id", "default")
+        .maybeSingle();
+      if (!error && data) {
+        setSchoolSettings({
+          ...DEFAULT_SCHOOL_SETTINGS,
+          ...(data as SchoolSettings),
+        });
+      }
+    } catch {
+      // Table may not exist yet; keep defaults
+    }
+  }, [isConfigured]);
 
   const checkSchema = useCallback(async () => {
     if (!isConfigured) {
@@ -107,6 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     checkSchema();
+    refreshSchoolSettings();
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -209,7 +239,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAdmin,
         isConfigured,
         isSchemaReady,
+        schoolSettings,
         checkSchema,
+        refreshSchoolSettings,
         signIn,
         signUp,
         signOut,

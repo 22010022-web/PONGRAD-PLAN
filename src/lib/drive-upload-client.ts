@@ -7,10 +7,17 @@ export interface DriveUploadResult {
   fileName: string;
 }
 
+export interface DriveUploadOptions {
+  kind?: "plan" | "post" | "review";
+  replaceFileId?: string | null;
+  planId?: string;
+}
+
 export async function uploadPdfToGoogleDrive(
   file: File,
   teacherName: string,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  options?: DriveUploadOptions
 ): Promise<DriveUploadResult> {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
     throw new Error("กรุณาเลือกไฟล์ PDF (.pdf) เท่านั้น");
@@ -40,6 +47,7 @@ export async function uploadPdfToGoogleDrive(
       mimeType: "application/pdf",
       teacherName,
       fileSize: file.size,
+      kind: options?.kind || "plan",
     }),
   });
 
@@ -95,7 +103,11 @@ export async function uploadPdfToGoogleDrive(
   const finalizeRes = await fetch("/api/drive/finalize", {
     method: "POST",
     headers,
-    body: JSON.stringify({ fileId: uploadedFileId }),
+    body: JSON.stringify({
+      fileId: uploadedFileId,
+      replaceFileId: options?.replaceFileId || undefined,
+      planId: options?.planId || undefined,
+    }),
   });
 
   const finalizeData = await finalizeRes.json();

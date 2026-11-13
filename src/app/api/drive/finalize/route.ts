@@ -14,8 +14,8 @@ export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    await requireUser(req);
-    const { fileId } = await req.json();
+    const { user, profile, supabase } = await requireUser(req);
+    const { fileId, replaceFileId, planId } = await req.json();
     if (!fileId || typeof fileId !== "string") throw new HttpError(400, "ไม่พบรหัสไฟล์");
 
     try {
@@ -28,6 +28,38 @@ export async function POST(req: Request) {
         supportsAllDrives: true,
       });
       const shared = await allowAnyoneWithLinkToView(fileId);
+
+      // หากเป็นการส่งไฟล์ใหม่แทนไฟล์เดิม ให้ย้ายไฟล์เดิมลงถังขยะแบบ best-effort
+      if (
+        replaceFileId &&
+        typeof replaceFileId === "string" &&
+        replaceFileId !== fileId &&
+        planId &&
+        typeof planId === "string"
+      ) {
+        try {
+          const { data: planRow } = await supabase
+            .from("lesson_plans")
+            .select("id, created_by, plan_file_id, post_file_id")
+            .eq("id", planId)
+            .single();
+
+          const canReplace =
+            planRow &&
+            (profile?.role === "admin" || planRow.created_by === user.id) &&
+            (planRow.plan_file_id === replaceFileId || planRow.post_file_id === replaceFileId);
+
+          if (canReplace && (await isInsideSchoolFolder(replaceFileId))) {
+            await getDrive().files.update({
+              fileId: replaceFileId,
+              requestBody: { trashed: true },
+              supportsAllDrives: true,
+            });
+          }
+        } catch (trashErr) {
+          console.warn("Could not trash replaced file:", trashErr);
+        }
+      }
 
       return NextResponse.json({
         fileId,

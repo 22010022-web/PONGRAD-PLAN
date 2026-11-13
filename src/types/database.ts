@@ -69,3 +69,11 @@ export interface PlanReview {
   reviewed_at: string;
   created_by?: string;
 }
+
+export interface SchoolSettings {
+  id: string;
+  school_name: string;
+  system_title: string;
+  logo_url?: string | null;
+  updated_at?: string;
+}

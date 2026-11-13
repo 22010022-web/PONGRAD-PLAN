@@ -86,6 +86,27 @@ export async function POST(request: Request) {
         url: `${appUrl}/my-plans`,
         primary: false,
       });
+    } else if (eventType === "plan_revised" || eventType === "post_revised") {
+      const isPost = eventType === "post_revised";
+      title = isPost ? "ส่งบันทึกหลังสอนฉบับแก้ไขแล้ว" : "ส่งแผนฉบับแก้ไข (แทนไฟล์เดิม)";
+      subtitle = isPost
+        ? "สถานะ: เสร็จสมบูรณ์ (ผอ. ไม่ต้องตรวจซ้ำ)"
+        : "สถานะ: แผนผ่าน (รอส่งบันทึก) | ผอ. ไม่ต้องตรวจซ้ำ";
+      headerColor = "#0d9488"; // Teal
+      fields = [
+        { label: "ผู้สอน", value: planData.teacher_name },
+        { label: "รายวิชา", value: `${planData.subject} (${planData.class_level})` },
+        { label: "รูปแบบ", value: `${planData.scope_value} (v${planData.version})` },
+      ];
+      buttons = [
+        {
+          label: "เปิดดูไฟล์ฉบับแก้ไข (PDF)",
+          url: isPost ? planData.post_file_url : planData.plan_file_url,
+          primary: true,
+          color: "#0d9488",
+        },
+        { label: "ดูภาพรวมแดชบอร์ด", url: `${appUrl}`, primary: false },
+      ];
     }
 
     const res = await sendLineFlexNotification({

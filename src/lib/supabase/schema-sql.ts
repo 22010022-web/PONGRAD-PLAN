@@ -81,6 +81,22 @@ CREATE TABLE IF NOT EXISTS public.plan_reviews (
     created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
+-- 2.5 Table: school_settings (โลโก้และข้อมูลโรงเรียนที่ ผอ./แอดมิน แก้ไขได้)
+CREATE TABLE IF NOT EXISTS public.school_settings (
+    id TEXT PRIMARY KEY DEFAULT 'default',
+    school_name TEXT NOT NULL DEFAULT 'โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)',
+    system_title TEXT NOT NULL DEFAULT 'ระบบติดตามภาระงานการส่งแผนการจัดการเรียนรู้และบันทึกหลังสอน',
+    logo_url TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+INSERT INTO public.school_settings (id, school_name, system_title)
+VALUES (
+    'default',
+    'โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)',
+    'ระบบติดตามภาระงานการส่งแผนการจัดการเรียนรู้และบันทึกหลังสอน'
+) ON CONFLICT (id) DO NOTHING;
+
 -- 3. Initial Seed Data (ข้อมูลครูทั้ง 9 ท่าน)
 INSERT INTO public.teachers (id, name, short_name, category, grade_level, default_subject, display_order)
 VALUES
@@ -204,13 +220,27 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 GRANT EXECUTE ON FUNCTION public.reset_teacher_password(TEXT, UUID, TEXT) TO anon, authenticated;
 
--- 5. Row Level Security (RLS) - ล็อกสิทธิ์แน่นหนา ป้องกันครูลักไก่ผ่านงานเอง
+-- 5. Row Level Security (RLS) - ล็อกสิทธิ์แน่นหนาตามบทบาท
 ALTER TABLE public.teachers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.lesson_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.plan_reviews ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.school_settings ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Everyone can view teachers" ON public.teachers FOR SELECT USING (true);
+CREATE POLICY "Admins can insert teachers" ON public.teachers FOR INSERT
+WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'));
+CREATE POLICY "Admins can update teachers" ON public.teachers FOR UPDATE
+USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'));
+CREATE POLICY "Admins can delete teachers" ON public.teachers FOR DELETE
+USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'));
+
+CREATE POLICY "Everyone can view school settings" ON public.school_settings FOR SELECT USING (true);
+CREATE POLICY "Admins can insert school settings" ON public.school_settings FOR INSERT
+WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'));
+CREATE POLICY "Admins can update school settings" ON public.school_settings FOR UPDATE
+USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'));
+
 CREATE POLICY "Users can view all profiles" ON public.profiles FOR SELECT USING (true);
 CREATE POLICY "Users can update their own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 
@@ -231,14 +261,32 @@ WITH CHECK (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
     OR
     (
-        created_by = auth.uid() AND
-        status IN ('รอตรวจแผน', 'รอตรวจบันทึก')
+        created_by = auth.uid() AND (
+            status IN ('รอตรวจแผน', 'รอตรวจบันทึก')
+            OR (
+                status = 'แผนผ่าน (รอส่งบันทึก)' AND
+                EXISTS (
+                    SELECT 1 FROM public.plan_reviews pr
+                    WHERE pr.plan_id = lesson_plans.id AND pr.status_assigned = 'แผนต้องแก้ไข'
+                )
+            )
+            OR (
+                status = 'เสร็จสมบูรณ์' AND
+                EXISTS (
+                    SELECT 1 FROM public.plan_reviews pr
+                    WHERE pr.plan_id = lesson_plans.id AND pr.status_assigned = 'บันทึกต้องแก้ไข'
+                )
+            )
+        )
     )
 );
 
-CREATE POLICY "Admins can delete plans" ON public.lesson_plans FOR DELETE
+DROP POLICY IF EXISTS "Admins can delete plans" ON public.lesson_plans;
+CREATE POLICY "Admins or teachers pending can delete plans" ON public.lesson_plans FOR DELETE
 USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
+    OR
+    (created_by = auth.uid() AND status = 'รอตรวจแผน')
 );
 
 CREATE POLICY "Everyone can view plan reviews" ON public.plan_reviews FOR SELECT USING (true);

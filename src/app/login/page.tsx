@@ -16,7 +16,7 @@ import {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, signIn, signUp, isConfigured } = useAuth();
+  const { user, signIn, signUp, isConfigured, schoolSettings } = useAuth();
 
   const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
   const [email, setEmail] = useState("");
@@ -161,13 +161,21 @@ export default function LoginPage() {
   return (
     <div className="max-w-md mx-auto my-8 p-6 sm:p-8 glass-panel rounded-3xl border border-white/80 shadow-xl">
       <div className="text-center mb-6">
-        <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-pink-600 to-amber-500 flex items-center justify-center text-white font-bold text-2xl shadow-lg mb-3">
-          PR
-        </div>
+        {schoolSettings.logo_url ? (
+          <img
+            src={schoolSettings.logo_url}
+            alt="โลโก้โรงเรียน"
+            className="w-16 h-16 mx-auto rounded-2xl object-contain bg-white p-1 shadow-lg mb-3 border border-white/80"
+          />
+        ) : (
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-pink-600 to-amber-500 flex items-center justify-center text-white font-bold text-2xl shadow-lg mb-3">
+            PR
+          </div>
+        )}
         <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-800">
-          ระบบติดตามภาระงานการส่งแผน
+          {schoolSettings.system_title}
         </h1>
-        <p className="text-xs text-slate-500 mt-1">โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)</p>
+        <p className="text-xs text-slate-500 mt-1">{schoolSettings.school_name}</p>
       </div>
 
       {/* Tabs Switcher */}
