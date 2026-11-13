@@ -13,24 +13,28 @@ export default function Navbar() {
     <header className="sticky top-0 z-50 glass-panel border-b border-white/60">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
-          <Link href="/" className="flex items-center space-x-3 group">
+          <Link href="/" className="flex items-center space-x-3 group min-w-0">
             {schoolSettings.logo_url ? (
               <img
                 src={schoolSettings.logo_url}
                 alt="โลโก้โรงเรียน"
-                className="w-10 h-10 rounded-xl object-contain bg-white p-0.5 shadow-md group-hover:scale-105 transition-transform border border-white/80"
+                className="w-10 h-10 rounded-xl object-contain bg-white p-0.5 shadow-md group-hover:scale-105 transition-transform border border-white/80 shrink-0"
               />
             ) : (
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-600 to-amber-500 flex items-center justify-center text-white font-bold text-lg shadow-md group-hover:scale-105 transition-transform">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-600 to-amber-500 flex items-center justify-center text-white font-bold text-lg shadow-md group-hover:scale-105 transition-transform shrink-0">
                 PR
               </div>
             )}
-            <div>
-              <div className="font-display font-bold text-slate-800 text-sm sm:text-base leading-tight">
-                {schoolSettings.school_name}
-              </div>
-              <div className="text-xs text-pink-700 font-medium">
+            <div className="min-w-0">
+              <div className="font-display font-bold text-slate-800 text-sm sm:text-base leading-tight truncate">
                 {schoolSettings.system_title}
+              </div>
+              <div className="text-[11px] sm:text-xs text-slate-600 font-medium flex items-center gap-1.5 truncate">
+                <span className="truncate">{schoolSettings.school_name}</span>
+                <span className="hidden sm:inline-block w-1.5 h-1.5 rounded-full bg-pink-500 shrink-0" />
+                <span className="hidden sm:inline-block text-[11px] text-pink-700 font-semibold shrink-0">
+                  สพป.จันทบุรี เขต 1
+                </span>
               </div>
             </div>
           </Link>
