@@ -4,7 +4,15 @@ import { useState, useEffect } from "react";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { LessonPlan, PlanStatus } from "@/types/database";
-import { FileCheck, ShieldAlert, CheckCircle2, AlertTriangle, ExternalLink, X } from "lucide-react";
+import { FileCheck, ShieldAlert, CheckCircle2, AlertTriangle, ExternalLink, X, Eye, EyeOff } from "lucide-react";
+import { SignaturePad } from "@/components/signature-pad";
+
+function getDrivePreviewSrc(url?: string | null, explicitId?: string | null): string | null {
+  if (explicitId) return `https://drive.google.com/file/d/${explicitId}/preview`;
+  if (!url) return null;
+  const match = /\/d\/([a-zA-Z0-9_-]{10,})/.exec(url) || /[?&]id=([a-zA-Z0-9_-]{10,})/.exec(url);
+  return match?.[1] ? `https://drive.google.com/file/d/${match[1]}/preview` : null;
+}
 
 export default function ReviewPage() {
   const { user, profile, isAdmin } = useAuth();
@@ -13,6 +21,10 @@ export default function ReviewPage() {
   const [selectedPlan, setSelectedPlan] = useState<LessonPlan | null>(null);
   const [reviewNote, setReviewNote] = useState("");
   const [reviewedFileUrl, setReviewedFileUrl] = useState("");
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
+  const [signPageChoice, setSignPageChoice] = useState<"first" | "last">("last");
+  const [signPosition, setSignPosition] = useState<"bottom-right" | "bottom-center" | "bottom-left">("bottom-right");
+  const [showPreview, setShowPreview] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -41,10 +53,58 @@ export default function ReviewPage() {
     setMsg(null);
 
     try {
-      // 1. บันทึกผลการตรวจลงตาราง plan_reviews
       const reviewerName = profile?.full_name || "นางสาวอำพร คงเจริญ";
       const reviewerRole = "ผู้อำนวยการสถานศึกษา";
+      let finalReviewedUrl = reviewedFileUrl.trim() || null;
+      let finalReviewedFileId: string | null = null;
 
+      // หาก ผอ. เซ็นชื่อ E-Signature บนหน้าเว็บ ให้นำลายเซ็นไปฝังลงใน PDF และอัปโหลดกลับไปที่ Google Drive
+      if (signatureDataUrl && statusAssigned !== "แผนต้องแก้ไข") {
+        setMsg({
+          type: "success",
+          text: "กำลังประทับลายเซ็นลงในไฟล์ PDF และอัปโหลดกลับไปยัง Google Drive...",
+        });
+
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session?.access_token) {
+          throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่");
+        }
+
+        const sourceFileUrl = selectedPlan.post_file_url || selectedPlan.plan_file_url;
+        const sourceFileId = selectedPlan.post_file_id || selectedPlan.plan_file_id;
+        const todayStr = new Date().toLocaleDateString("en-GB");
+
+        const signRes = await fetch("/api/drive/sign", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            fileId: sourceFileId || undefined,
+            fileUrl: sourceFileUrl,
+            signatureDataUrl,
+            pageChoice: signPageChoice,
+            position: signPosition,
+            teacherName: selectedPlan.teacher_name,
+            taskCode: selectedPlan.task_code,
+            signDateText: todayStr,
+          }),
+        });
+
+        const signData = await signRes.json();
+        if (!signRes.ok || !signData.viewUrl) {
+          throw new Error(signData.error || "ฝังลายเซ็นลงในไฟล์ PDF ไม่สำเร็จ");
+        }
+        finalReviewedUrl = signData.viewUrl;
+        finalReviewedFileId = signData.fileId || null;
+        setReviewedFileUrl(signData.viewUrl);
+      }
+
+      // 1. บันทึกผลการตรวจลงตาราง plan_reviews
       const reviewRecord = {
         plan_id: selectedPlan.id,
         reviewer_name: reviewerName,
@@ -52,7 +112,8 @@ export default function ReviewPage() {
         review_mode: reviewMode,
         status_assigned: statusAssigned,
         note: reviewNote.trim() || "-",
-        reviewed_file_url: reviewedFileUrl.trim() || null,
+        reviewed_file_url: finalReviewedUrl,
+        reviewed_file_id: finalReviewedFileId,
         created_by: user.id,
       };
 
@@ -90,6 +151,7 @@ export default function ReviewPage() {
         setSelectedPlan(null);
         setReviewNote("");
         setReviewedFileUrl("");
+        setSignatureDataUrl(null);
         setMsg(null);
         loadPlansForReview();
       }, 1500);
@@ -195,7 +257,7 @@ export default function ReviewPage() {
       {/* Review Modal */}
       {selectedPlan && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-          <div className="max-w-xl w-full glass-panel rounded-3xl p-6 border border-white/80 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="max-w-3xl w-full glass-panel rounded-3xl p-6 border border-white/80 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-slate-200 pb-3">
               <div>
                 <h3 className="font-display font-bold text-lg text-slate-800">
@@ -206,7 +268,10 @@ export default function ReviewPage() {
                 </p>
               </div>
               <button
-                onClick={() => setSelectedPlan(null)}
+                onClick={() => {
+                  setSelectedPlan(null);
+                  setSignatureDataUrl(null);
+                }}
                 className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100"
               >
                 <X className="w-5 h-5" />
@@ -219,17 +284,91 @@ export default function ReviewPage() {
               </div>
             )}
 
-            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex justify-between items-center">
-              <span className="text-xs text-slate-600 font-medium">ไฟล์เอกสารที่ครูส่ง:</span>
-              <a
-                href={selectedPlan.post_file_url || selectedPlan.plan_file_url}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 rounded-xl bg-pink-50 text-pink-700 border border-pink-200 text-xs font-bold hover:bg-pink-100 flex items-center gap-1"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                เปิดอ่านเอกสาร PDF ↗
-              </a>
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+              <div className="flex flex-wrap justify-between items-center gap-2">
+                <span className="text-xs text-slate-600 font-medium">ไฟล์เอกสารที่ครูส่ง:</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview((v) => !v)}
+                    className="px-3 py-1.5 rounded-xl bg-white text-slate-700 border border-slate-200 text-xs font-semibold hover:bg-slate-100 flex items-center gap-1"
+                  >
+                    {showPreview ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    {showPreview ? "ซ่อนตัวอย่าง PDF" : "แสดงตัวอย่าง PDF"}
+                  </button>
+                  <a
+                    href={selectedPlan.post_file_url || selectedPlan.plan_file_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-pink-50 text-pink-700 border border-pink-200 text-xs font-bold hover:bg-pink-100 flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    เปิดอ่านในแท็บใหม่ ↗
+                  </a>
+                </div>
+              </div>
+
+              {showPreview && (() => {
+                const previewSrc = getDrivePreviewSrc(
+                  selectedPlan.post_file_url || selectedPlan.plan_file_url,
+                  selectedPlan.post_file_id || selectedPlan.plan_file_id
+                );
+                return previewSrc ? (
+                  <iframe
+                    src={previewSrc}
+                    title="PDF Preview"
+                    className="w-full h-72 rounded-xl border border-slate-200 bg-white"
+                    allow="autoplay"
+                  />
+                ) : (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 p-2 rounded-lg">
+                    ไม่สามารถแสดงตัวอย่างในหน้านี้ได้ กรุณากด &quot;เปิดอ่านในแท็บใหม่&quot;
+                  </p>
+                );
+              })()}
+            </div>
+
+            {/* E-Signature Section */}
+            <div className="p-4 rounded-2xl bg-blue-50/60 border border-blue-200 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800">
+                    ลงนามอิเล็กทรอนิกส์ (E-Signature) บนไฟล์ PDF
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    เซ็นชื่อด้านล่างแล้วกดอนุมัติ ระบบจะฝังลายเซ็นลงใน PDF และอัปโหลดกลับ Google Drive ให้อัตโนมัติ
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <select
+                    value={signPageChoice}
+                    onChange={(e) => setSignPageChoice(e.target.value as "first" | "last")}
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs"
+                  >
+                    <option value="last">ประทับที่หน้าสุดท้าย</option>
+                    <option value="first">ประทับที่หน้าแรก</option>
+                  </select>
+                  <select
+                    value={signPosition}
+                    onChange={(e) =>
+                      setSignPosition(
+                        e.target.value as "bottom-right" | "bottom-center" | "bottom-left"
+                      )
+                    }
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs"
+                  >
+                    <option value="bottom-right">มุมขวาล่าง</option>
+                    <option value="bottom-center">กึ่งกลางล่าง</option>
+                    <option value="bottom-left">มุมซ้ายล่าง</option>
+                  </select>
+                </div>
+              </div>
+
+              <SignaturePad
+                onChange={setSignatureDataUrl}
+                signerName={profile?.full_name || "นางสาวอำพร คงเจริญ"}
+                signerTitle="ผู้อำนวยการโรงเรียนวัดโป่งแรดฯ"
+              />
             </div>
 
             <div className="space-y-3">
@@ -248,7 +387,7 @@ export default function ReviewPage() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  ลิงก์ไฟล์ PDF ที่ ผอ. ขีดตรวจใน iPad (ถ้ามี)
+                  ลิงก์ไฟล์ PDF ที่ตรวจแล้ว (สร้างอัตโนมัติเมื่อเซ็น E-Signature หรือวางลิงก์เอง)
                 </label>
                 <input
                   type="url"

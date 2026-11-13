@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
-import { UploadCloud, CheckCircle2, FileText, AlertCircle, ArrowLeft } from "lucide-react";
+import { UploadCloud, CheckCircle2, FileText, AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
+import { uploadPdfToGoogleDrive } from "@/lib/drive-upload-client";
 
 export default function SubmitPlanPage() {
   const { user, profile, teacher } = useAuth();
@@ -16,6 +17,10 @@ export default function SubmitPlanPage() {
   const [subject, setSubject] = useState(teacher?.default_subject || "ภาษาไทย");
   const [classLevel, setClassLevel] = useState(teacher?.grade_level || "ป.1");
   const [fileUrl, setFileUrl] = useState("");
+  const [fileId, setFileId] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
@@ -29,6 +34,30 @@ export default function SubmitPlanPage() {
       setScopeValue("สัปดาห์ที่ 1 (พ.ย.)");
     }
   }, [scopeType]);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setErrorMsg("");
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      const teacherName = profile?.full_name || teacher?.name || user?.email || "ครูผู้สอน";
+      const result = await uploadPdfToGoogleDrive(file, teacherName, (pct) =>
+        setUploadProgress(pct)
+      );
+      setFileId(result.fileId);
+      setFileUrl(result.viewUrl);
+      setUploadedFileName(result.fileName);
+    } catch (err: any) {
+      setErrorMsg(err?.message || "อัปโหลดไฟล์ขึ้น Google Drive ไม่สำเร็จ");
+      setUploadProgress(null);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,6 +89,7 @@ export default function SubmitPlanPage() {
         scope_value: scopeValue,
         unit_title: unitTitle.trim() || null,
         plan_file_url: fileUrl.trim(),
+        plan_file_id: fileId,
         status: "รอตรวจแผน",
         created_by: user.id,
       };
@@ -254,30 +284,78 @@ export default function SubmitPlanPage() {
           </div>
         </div>
 
-        {/* ลิงก์ไฟล์ PDF Google Drive */}
-        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-          <label className="block text-xs font-bold text-slate-700 mb-1">
-            ลิงก์ไฟล์ PDF แผนการสอน (จาก Google Drive)
-          </label>
-          <p className="text-[11px] text-slate-500 mb-2">
-            อัปโหลดไฟล์ PDF ขึ้น Google Drive แล้วกด &quot;คัดลอกลิงก์ (แชร์แบบทุกคนที่มีลิงก์ดูได้)&quot; นำมาวางที่นี่
-          </p>
-          <div className="relative">
-            <UploadCloud className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-            <input
-              type="url"
-              required
-              value={fileUrl}
-              onChange={(e) => setFileUrl(e.target.value)}
-              placeholder="https://drive.google.com/file/d/..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl text-sm bg-white border border-slate-300 text-slate-800 focus:outline-none focus:ring-2 focus:ring-pink-500"
-            />
+        {/* อัปโหลดไฟล์ PDF เข้า Google Drive อัตโนมัติ หรือวางลิงก์ */}
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              อัปโหลดไฟล์ PDF แผนการสอน (เก็บเข้า Google Drive โรงเรียนอัตโนมัติ)
+            </label>
+            <p className="text-[11px] text-slate-500 mb-2">
+              เลือกไฟล์ .pdf จากเครื่อง ระบบจะอัปโหลดเข้าโฟลเดอร์ Google Drive ของโรงเรียนให้อัตโนมัติ (หรือวางลิงก์ Drive ด้านล่าง)
+            </p>
+            <label className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl border-2 border-dashed border-pink-300 bg-white hover:bg-pink-50/40 cursor-pointer transition-colors text-xs font-semibold text-pink-700">
+              {isUploading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>กำลังอัปโหลดเข้า Google Drive... {uploadProgress ?? 0}%</span>
+                </>
+              ) : (
+                <>
+                  <UploadCloud className="w-4 h-4" />
+                  <span>{uploadedFileName ? `เปลี่ยนไฟล์ (${uploadedFileName})` : "เลือกไฟล์ PDF จากเครื่อง"}</span>
+                </>
+              )}
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                onChange={handleFileChange}
+                disabled={isUploading}
+                className="hidden"
+              />
+            </label>
+
+            {uploadProgress !== null && (
+              <div className="mt-2 w-full h-2 rounded-full bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-pink-500 to-amber-500 transition-all duration-200"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            )}
+
+            {uploadedFileName && fileId && !isUploading && (
+              <p className="mt-1.5 text-xs text-emerald-700 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5" />
+                อัปโหลดเข้า Google Drive สำเร็จ: <span className="font-semibold">{uploadedFileName}</span>
+              </p>
+            )}
+          </div>
+
+          <div className="pt-2 border-t border-slate-200">
+            <label className="block text-[11px] font-medium text-slate-600 mb-1">
+              ลิงก์ไฟล์ Google Drive (กรอกอัตโนมัติหลังอัปโหลด หรือวางลิงก์เอง)
+            </label>
+            <div className="relative">
+              <UploadCloud className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+              <input
+                type="url"
+                required
+                value={fileUrl}
+                onChange={(e) => {
+                  setFileUrl(e.target.value);
+                  setFileId(null);
+                  setUploadedFileName(null);
+                }}
+                placeholder="https://drive.google.com/file/d/..."
+                className="w-full pl-10 pr-4 py-2 rounded-xl text-xs bg-white border border-slate-300 text-slate-800 focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+            </div>
           </div>
         </div>
 
         <button
           type="submit"
-          disabled={isSubmitting}
+          disabled={isSubmitting || isUploading}
           className="w-full py-3.5 rounded-xl bg-gradient-to-r from-pink-600 via-purple-600 to-amber-500 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all disabled:opacity-50"
         >
           {isSubmitting ? "กำลังส่งแผนและแจ้งเตือน LINE..." : "✔ ยืนยันการส่งแผนการสอน"}

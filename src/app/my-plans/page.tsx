@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { LessonPlan } from "@/types/database";
-import { BookOpen, AlertCircle, CheckCircle2, Clock, Upload, Link as LinkIcon } from "lucide-react";
+import { BookOpen, AlertCircle, CheckCircle2, Clock, Upload, Link as LinkIcon, Loader2, FileText } from "lucide-react";
+import { uploadPdfToGoogleDrive } from "@/lib/drive-upload-client";
 
 export default function MyPlansPage() {
   const { user } = useAuth();
@@ -13,6 +14,10 @@ export default function MyPlansPage() {
   const [selectedPlanForPost, setSelectedPlanForPost] = useState<LessonPlan | null>(null);
   const [useExistingFile, setUseExistingFile] = useState(true);
   const [postFileUrl, setPostFileUrl] = useState("");
+  const [postFileId, setPostFileId] = useState<string | null>(null);
+  const [postUploadedName, setPostUploadedName] = useState<string | null>(null);
+  const [postUploadProgress, setPostUploadProgress] = useState<number | null>(null);
+  const [isUploadingPost, setIsUploadingPost] = useState(false);
   const [isSubmittingPost, setIsSubmittingPost] = useState(false);
   const [postSuccess, setPostSuccess] = useState("");
   const [postError, setPostError] = useState("");
@@ -38,6 +43,31 @@ export default function MyPlansPage() {
     loadMyPlans();
   }, [user]);
 
+  const handlePostFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedPlanForPost) return;
+
+    setPostError("");
+    setIsUploadingPost(true);
+    setPostUploadProgress(0);
+
+    try {
+      const result = await uploadPdfToGoogleDrive(
+        file,
+        selectedPlanForPost.teacher_name || "ครูผู้สอน",
+        (pct) => setPostUploadProgress(pct)
+      );
+      setPostFileId(result.fileId);
+      setPostFileUrl(result.viewUrl);
+      setPostUploadedName(result.fileName);
+    } catch (err: any) {
+      setPostError(err?.message || "อัปโหลดไฟล์บันทึกหลังสอนไม่สำเร็จ");
+      setPostUploadProgress(null);
+    } finally {
+      setIsUploadingPost(false);
+    }
+  };
+
   const handlePostSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlanForPost) return;
@@ -48,12 +78,16 @@ export default function MyPlansPage() {
 
     try {
       const finalPostUrl = useExistingFile ? selectedPlanForPost.plan_file_url : postFileUrl.trim();
+      const finalPostFileId = useExistingFile
+        ? selectedPlanForPost.plan_file_id || null
+        : postFileId;
 
       const { error: updateErr } = await supabase
         .from("lesson_plans")
         .update({
           status: "รอตรวจบันทึก",
           post_file_url: finalPostUrl,
+          post_file_id: finalPostFileId,
           use_existing_file: useExistingFile,
           post_submitted_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -268,18 +302,66 @@ export default function MyPlansPage() {
               </div>
 
               {!useExistingFile && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ลิงก์ไฟล์ PDF บันทึกหลังสอน (Google Drive)
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    value={postFileUrl}
-                    onChange={(e) => setPostFileUrl(e.target.value)}
-                    placeholder="https://drive.google.com/file/d/..."
-                    className="w-full px-3 py-2 rounded-xl text-xs glass-input"
-                  />
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      อัปโหลดไฟล์ PDF บันทึกหลังสอน (เข้า Google Drive อัตโนมัติ)
+                    </label>
+                    <label className="flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-xl border-2 border-dashed border-emerald-300 bg-white hover:bg-emerald-50/40 cursor-pointer text-xs font-semibold text-emerald-700">
+                      {isUploadingPost ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>กำลังอัปโหลด... {postUploadProgress ?? 0}%</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4" />
+                          <span>{postUploadedName ? `เปลี่ยนไฟล์ (${postUploadedName})` : "เลือกไฟล์ PDF จากเครื่อง"}</span>
+                        </>
+                      )}
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        onChange={handlePostFileUpload}
+                        disabled={isUploadingPost}
+                        className="hidden"
+                      />
+                    </label>
+
+                    {postUploadProgress !== null && (
+                      <div className="mt-2 w-full h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-500 transition-all duration-200"
+                          style={{ width: `${postUploadProgress}%` }}
+                        />
+                      </div>
+                    )}
+
+                    {postUploadedName && postFileId && !isUploadingPost && (
+                      <p className="mt-1 text-[11px] text-emerald-700 flex items-center gap-1">
+                        <FileText className="w-3.5 h-3.5" />
+                        อัปโหลดสำเร็จ: {postUploadedName}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      หรือวางลิงก์ Google Drive
+                    </label>
+                    <input
+                      type="url"
+                      required
+                      value={postFileUrl}
+                      onChange={(e) => {
+                        setPostFileUrl(e.target.value);
+                        setPostFileId(null);
+                        setPostUploadedName(null);
+                      }}
+                      placeholder="https://drive.google.com/file/d/..."
+                      className="w-full px-3 py-2 rounded-xl text-xs glass-input"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -293,7 +375,7 @@ export default function MyPlansPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingPost}
+                  disabled={isSubmittingPost || isUploadingPost}
                   className="w-1/2 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-bold shadow disabled:opacity-50"
                 >
                   {isSubmittingPost ? "กำลังบันทึก..." : "ส่งบันทึก"}
