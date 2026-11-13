@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
-import { BookOpen, LayoutDashboard, PlusCircle, FileCheck, LogIn, LogOut, Settings } from "lucide-react";
+import { BookOpen, LayoutDashboard, PlusCircle, FileCheck, LogIn, LogOut, Settings, Wrench } from "lucide-react";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -46,6 +46,18 @@ export default function Navbar() {
             >
               <LayoutDashboard className="w-4 h-4" />
               <span className="hidden sm:inline">แดชบอร์ด</span>
+            </Link>
+
+            <Link
+              href="/pdf-tools"
+              className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                pathname === "/pdf-tools"
+                  ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-sm"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+              }`}
+            >
+              <Wrench className="w-4 h-4" />
+              <span className="hidden sm:inline">PDF Tools</span>
             </Link>
 
             {user && (
