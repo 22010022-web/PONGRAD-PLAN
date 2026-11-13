@@ -137,10 +137,7 @@ DECLARE
   v_full_name TEXT;
 BEGIN
   v_full_name := COALESCE(NULLIF(TRIM(new.raw_user_meta_data->>'full_name'), ''), new.email, 'ผู้ใช้งาน');
-  
-  IF (new.raw_user_meta_data->>'role') = 'admin' OR new.email ILIKE '%director%' OR new.email ILIKE '%admin%' THEN
-    v_role := 'admin';
-  END IF;
+  v_role := 'teacher';
 
   IF (new.raw_user_meta_data->>'teacher_id') IS NOT NULL AND (new.raw_user_meta_data->>'teacher_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     v_teacher_id := (new.raw_user_meta_data->>'teacher_id')::UUID;

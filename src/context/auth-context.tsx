@@ -148,7 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string,
     fullName: string,
-    role: UserRole,
+    _role: UserRole,
     teacherId?: string,
     teacherName?: string
   ) => {
@@ -159,7 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       options: {
         data: {
           full_name: fullName.trim(),
-          role,
+          role: "teacher",
           teacher_id: teacherId || null,
           teacher_name: teacherName || fullName.trim(),
         },

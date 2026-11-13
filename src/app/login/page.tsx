@@ -8,13 +8,10 @@ import { Teacher } from "@/types/database";
 import {
   Lock,
   Mail,
-  User as UserIcon,
   ArrowRight,
   AlertCircle,
   CheckCircle2,
-  KeyRound,
   ArrowLeft,
-  ExternalLink,
 } from "lucide-react";
 
 export default function LoginPage() {
@@ -25,9 +22,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [fullName, setFullName] = useState("");
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
-  const [userRole, setUserRole] = useState<"teacher" | "admin">("teacher");
 
   const [teachersList, setTeachersList] = useState<Teacher[]>([]);
   const [loading, setLoading] = useState(false);
@@ -93,15 +88,19 @@ export default function LoginPage() {
     }
 
     const matchedTeacher = teachersList.find((t) => t.id === selectedTeacherId);
-    const finalFullName = userRole === "admin" ? fullName : matchedTeacher?.name || fullName;
+    if (!matchedTeacher) {
+      setErrorMsg("กรุณาเลือกชื่อครูในระบบ");
+      setLoading(false);
+      return;
+    }
 
     const { error } = await signUp(
       email,
       password,
-      finalFullName,
-      userRole,
-      userRole === "teacher" ? selectedTeacherId : undefined,
-      userRole === "teacher" ? matchedTeacher?.name : undefined
+      matchedTeacher.name,
+      "teacher",
+      selectedTeacherId,
+      matchedTeacher.name
     );
 
     setLoading(false);
@@ -277,69 +276,26 @@ export default function LoginPage() {
 
       {mode === "signup" && (
         <form onSubmit={handleSignUp} className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">ประเภทผู้ใช้งาน</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setUserRole("teacher")}
-                className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${
-                  userRole === "teacher"
-                    ? "bg-pink-600 text-white border-pink-700"
-                    : "bg-white text-slate-700 border-slate-200"
-                }`}
-              >
-                ครูผู้สอน (9 ท่าน)
-              </button>
-              <button
-                type="button"
-                onClick={() => setUserRole("admin")}
-                className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${
-                  userRole === "admin"
-                    ? "bg-amber-500 text-white border-amber-600"
-                    : "bg-white text-slate-700 border-slate-200"
-                }`}
-              >
-                ผู้บริหาร (ผอ.)
-              </button>
-            </div>
+          <div className="p-3 rounded-2xl bg-pink-50 border border-pink-200 text-[11px] text-pink-800 font-medium">
+            สำหรับครูผู้สอนที่ยังไม่มีบัญชีเข้าใช้งาน (หากลืมรหัสผ่าน กด &quot;ลืมรหัสผ่าน?&quot; ในหน้าเข้าสู่ระบบ)
           </div>
 
-          {userRole === "teacher" ? (
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                เลือกชื่อครูในระบบ
-              </label>
-              <select
-                value={selectedTeacherId}
-                onChange={(e) => setSelectedTeacherId(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-xl text-xs glass-input font-medium"
-              >
-                {teachersList.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({t.grade_level})
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                ชื่อ-นามสกุล ผู้บริหาร
-              </label>
-              <div className="relative">
-                <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                <input
-                  type="text"
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="นางสาวอำพร คงเจริญ"
-                  className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs glass-input"
-                />
-              </div>
-            </div>
-          )}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              เลือกชื่อครูในระบบ (9 ท่าน)
+            </label>
+            <select
+              value={selectedTeacherId}
+              onChange={(e) => setSelectedTeacherId(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl text-xs glass-input font-medium"
+            >
+              {teachersList.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.grade_level})
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">อีเมลสำหรับล็อกอิน</label>

@@ -1,21 +1,152 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { UploadCloud, CheckCircle2, FileText, AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { uploadPdfToGoogleDrive } from "@/lib/drive-upload-client";
 
+interface SelectOption {
+  value: string;
+  label: string;
+}
+
+const TERM_OPTIONS: SelectOption[] = [
+  { value: "รายภาคเรียน (รวมเล่มเทอม 2/2569)", label: "ส่งรวมเล่ม รายภาคเรียนที่ 2/2569 (1 ครั้ง/วิชา/เทอม)" },
+  { value: "รายภาคเรียน (รวมเล่มเทอม 1/2569)", label: "ส่งรวมเล่ม รายภาคเรียนที่ 1/2569 (1 ครั้ง/วิชา/เทอม)" },
+  { value: "รายปีการศึกษา (รวมเล่มตลอดปี 2569)", label: "ส่งรวมเล่ม ตลอดปีการศึกษา 2569" },
+];
+
+const WEEK_OPTIONS: SelectOption[] = [
+  { value: "สัปดาห์ที่ 1 (พ.ย.)", label: "สัปดาห์ที่ 1 (พ.ย.)" },
+  { value: "สัปดาห์ที่ 2 (พ.ย.)", label: "สัปดาห์ที่ 2 (พ.ย.)" },
+  { value: "สัปดาห์ที่ 3 (พ.ย.)", label: "สัปดาห์ที่ 3 (พ.ย.)" },
+  { value: "สัปดาห์ที่ 4 (พ.ย.)", label: "สัปดาห์ที่ 4 (พ.ย.)" },
+  { value: "สัปดาห์ที่ 5 (ธ.ค.)", label: "สัปดาห์ที่ 5 (ธ.ค.)" },
+  { value: "สัปดาห์ที่ 6 (ธ.ค.)", label: "สัปดาห์ที่ 6 (ธ.ค.)" },
+  { value: "สัปดาห์ที่ 7 (ธ.ค.)", label: "สัปดาห์ที่ 7 (ธ.ค.)" },
+  { value: "สัปดาห์ที่ 8 (ธ.ค.)", label: "สัปดาห์ที่ 8 (ธ.ค.)" },
+  { value: "สัปดาห์ที่ 9 (ม.ค.)", label: "สัปดาห์ที่ 9 (ม.ค.)" },
+  { value: "สัปดาห์ที่ 10 (ม.ค.)", label: "สัปดาห์ที่ 10 (ม.ค.)" },
+  { value: "สัปดาห์ที่ 11 (ม.ค.)", label: "สัปดาห์ที่ 11 (ม.ค.)" },
+  { value: "สัปดาห์ที่ 12 (ม.ค.)", label: "สัปดาห์ที่ 12 (ม.ค.)" },
+  { value: "สัปดาห์ที่ 13 (ก.พ.)", label: "สัปดาห์ที่ 13 (ก.พ.)" },
+  { value: "สัปดาห์ที่ 14 (ก.พ.)", label: "สัปดาห์ที่ 14 (ก.พ.)" },
+  { value: "สัปดาห์ที่ 15 (ก.พ.)", label: "สัปดาห์ที่ 15 (ก.พ.)" },
+  { value: "สัปดาห์ที่ 16 (ก.พ.)", label: "สัปดาห์ที่ 16 (ก.พ.)" },
+  { value: "สัปดาห์ที่ 17 (มี.ค.)", label: "สัปดาห์ที่ 17 (มี.ค.)" },
+  { value: "สัปดาห์ที่ 18 (มี.ค.)", label: "สัปดาห์ที่ 18 (มี.ค.)" },
+  { value: "สัปดาห์ที่ 19 (มี.ค.)", label: "สัปดาห์ที่ 19 (มี.ค.)" },
+  { value: "สัปดาห์ที่ 20 (มี.ค.)", label: "สัปดาห์ที่ 20 (มี.ค.)" },
+];
+
+const EARLY_SUBJECTS: SelectOption[] = [
+  { value: "แผนการจัดประสบการณ์เรียนรู้ปฐมวัย", label: "แผนการจัดประสบการณ์เรียนรู้ปฐมวัย" },
+];
+
+const ELEM_SUBJECTS: SelectOption[] = [
+  { value: "ภาษาไทย", label: "ภาษาไทย" },
+  { value: "คณิตศาสตร์", label: "คณิตศาสตร์" },
+  { value: "วิทยาศาสตร์และเทคโนโลยี", label: "วิทยาศาสตร์และเทคโนโลยี" },
+  { value: "คอมพิวเตอร์ (วิทยาการคำนวณ)", label: "คอมพิวเตอร์ (วิทยาการคำนวณ)" },
+  { value: "ภาษาอังกฤษพื้นฐาน", label: "ภาษาอังกฤษพื้นฐาน" },
+  { value: "ภาษาอังกฤษเพิ่มเติม", label: "ภาษาอังกฤษเพิ่มเติม" },
+  { value: "สุขศึกษาและพลศึกษา", label: "สุขศึกษาและพลศึกษา" },
+  { value: "สังคมศึกษา ศาสนา และวัฒนธรรม", label: "สังคมศึกษา ศาสนา และวัฒนธรรม" },
+  { value: "ประวัติศาสตร์", label: "ประวัติศาสตร์" },
+  { value: "ศิลปะ", label: "ศิลปะ (ทัศนศิลป์ / ดนตรี / นาฏศิลป์)" },
+  { value: "การงานอาชีพ", label: "การงานอาชีพ" },
+  { value: "หน้าที่พลเมือง / ต้านทุจริตศึกษา", label: "หน้าที่พลเมือง / ต้านทุจริตศึกษา" },
+  { value: "กิจกรรมพัฒนาผู้เรียน", label: "กิจกรรมพัฒนาผู้เรียน (แนะแนว / ลูกเสือ / ชุมนุม)" },
+];
+
+const EARLY_CLASSES: SelectOption[] = [
+  { value: "ปฐมวัย", label: "ปฐมวัย (รวม)" },
+  { value: "อ.1", label: "อนุบาล 1 (อ.1)" },
+  { value: "อ.2", label: "อนุบาล 2 (อ.2)" },
+  { value: "อ.3", label: "อนุบาล 3 (อ.3)" },
+];
+
+const ELEM_CLASSES: SelectOption[] = [
+  { value: "ป.1", label: "ประถมศึกษาปีที่ 1 (ป.1)" },
+  { value: "ป.2", label: "ประถมศึกษาปีที่ 2 (ป.2)" },
+  { value: "ป.3", label: "ประถมศึกษาปีที่ 3 (ป.3)" },
+  { value: "ป.4", label: "ประถมศึกษาปีที่ 4 (ป.4)" },
+  { value: "ป.5", label: "ประถมศึกษาปีที่ 5 (ป.5)" },
+  { value: "ป.6", label: "ประถมศึกษาปีที่ 6 (ป.6)" },
+];
+
+function extractDefaultClass(gradeLevel?: string): string {
+  const match = /(ป\.[1-6]|อ\.[1-3]|ปฐมวัย)/.exec(gradeLevel || "");
+  return match?.[1] || "ป.1";
+}
+
 export default function SubmitPlanPage() {
-  const { user, profile, teacher } = useAuth();
+  const { user, profile, teacher, isAdmin } = useAuth();
   const router = useRouter();
 
+  const teacherProfileConfig = useMemo(() => {
+    const name = profile?.full_name || teacher?.name || "";
+    const isEarly =
+      teacher?.category === "early_childhood" ||
+      name.includes("ธารารัตน์") ||
+      name.includes("นภาวรรณ");
+    const isP1Only = name.includes("ณิชนันทน์");
+
+    if (isEarly) {
+      return {
+        mode: "early" as const,
+        defaultSubject: "แผนการจัดประสบการณ์เรียนรู้ปฐมวัย",
+        defaultClass: "ปฐมวัย",
+        subjectHint: "(เฉพาะระดับปฐมวัย)",
+        classHint: "(เฉพาะระดับปฐมวัย)",
+        allowWeek: false,
+      };
+    }
+
+    if (isP1Only) {
+      return {
+        mode: "p1" as const,
+        defaultSubject: "ภาษาไทย",
+        defaultClass: "ป.1",
+        subjectHint: "(ระดับประถมศึกษา)",
+        classHint: "(เฉพาะชั้น ป.1 เท่านั้น)",
+        allowWeek: true,
+      };
+    }
+
+    if (isAdmin) {
+      return {
+        mode: "admin" as const,
+        defaultSubject: "ภาษาไทย",
+        defaultClass: "ป.1",
+        subjectHint: "(ทุกหมวดวิชา)",
+        classHint: "(ทุกระดับชั้น)",
+        allowWeek: true,
+      };
+    }
+
+    const fallbackSubject = ELEM_SUBJECTS.some((s) => s.value === teacher?.default_subject)
+      ? (teacher?.default_subject as string)
+      : "ภาษาไทย";
+
+    return {
+      mode: "elem" as const,
+      defaultSubject: fallbackSubject,
+      defaultClass: extractDefaultClass(teacher?.grade_level),
+      subjectHint: "(ระดับประถมศึกษา)",
+      classHint: "(ระดับประถมศึกษา ป.1–ป.6)",
+      allowWeek: true,
+    };
+  }, [profile?.full_name, teacher?.name, teacher?.category, teacher?.default_subject, teacher?.grade_level, isAdmin]);
+
   const [scopeType, setScopeType] = useState<"term" | "unit" | "week">("term");
-  const [scopeValue, setScopeValue] = useState("รายภาคเรียน (รวมเล่มเทอม 2/2569)");
+  const [scopeValue, setScopeValue] = useState(TERM_OPTIONS[0].value);
   const [unitTitle, setUnitTitle] = useState("");
-  const [subject, setSubject] = useState(teacher?.default_subject || "ภาษาไทย");
-  const [classLevel, setClassLevel] = useState(teacher?.grade_level || "ป.1");
+  const [subject, setSubject] = useState("ภาษาไทย");
+  const [customSubject, setCustomSubject] = useState("");
+  const [classLevel, setClassLevel] = useState("ป.1");
   const [fileUrl, setFileUrl] = useState("");
   const [fileId, setFileId] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
@@ -26,12 +157,20 @@ export default function SubmitPlanPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
+    setSubject(teacherProfileConfig.defaultSubject);
+    setClassLevel(teacherProfileConfig.defaultClass);
+    if (!teacherProfileConfig.allowWeek) {
+      setScopeType((prev) => (prev === "week" ? "unit" : prev));
+    }
+  }, [teacherProfileConfig]);
+
+  useEffect(() => {
     if (scopeType === "term") {
-      setScopeValue("รายภาคเรียน (รวมเล่มเทอม 2/2569)");
+      setScopeValue(TERM_OPTIONS[0].value);
     } else if (scopeType === "unit") {
       setScopeValue("หน่วยการเรียนรู้ที่ 1");
     } else {
-      setScopeValue("สัปดาห์ที่ 1 (พ.ย.)");
+      setScopeValue(WEEK_OPTIONS[0].value);
     }
   }, [scopeType]);
 
@@ -70,6 +209,12 @@ export default function SubmitPlanPage() {
       return;
     }
 
+    const resolvedSubject = subject === "__CUSTOM__" ? customSubject.trim() : subject;
+    if (!resolvedSubject) {
+      setErrorMsg("กรุณาระบุชื่อรายวิชา");
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorMsg("");
     setSuccessMsg("");
@@ -83,7 +228,7 @@ export default function SubmitPlanPage() {
         task_code: taskCode,
         teacher_id: teacherId,
         teacher_name: teacherName,
-        subject,
+        subject: resolvedSubject,
         class_level: classLevel,
         scope_type: scopeType,
         scope_value: scopeValue,
@@ -165,7 +310,7 @@ export default function SubmitPlanPage() {
           <label className="block text-xs font-bold text-slate-700 mb-2">
             1. เลือกรูปแบบการส่งแผนการสอน (เลือกได้ตามความพร้อม)
           </label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className={`grid gap-2 ${teacherProfileConfig.allowWeek ? "grid-cols-3" : "grid-cols-2"}`}>
             <button
               type="button"
               onClick={() => setScopeType("term")}
@@ -188,24 +333,26 @@ export default function SubmitPlanPage() {
             >
               📑 รายหน่วยการเรียนรู้
             </button>
-            <button
-              type="button"
-              onClick={() => setScopeType("week")}
-              className={`p-3 rounded-2xl text-xs sm:text-sm font-bold border transition-all ${
-                scopeType === "week"
-                  ? "bg-sky-600 text-white border-sky-700 shadow-md"
-                  : "bg-white/80 text-slate-600 border-slate-200 hover:bg-white"
-              }`}
-            >
-              📅 รายสัปดาห์
-            </button>
+            {teacherProfileConfig.allowWeek && (
+              <button
+                type="button"
+                onClick={() => setScopeType("week")}
+                className={`p-3 rounded-2xl text-xs sm:text-sm font-bold border transition-all ${
+                  scopeType === "week"
+                    ? "bg-sky-600 text-white border-sky-700 shadow-md"
+                    : "bg-white/80 text-slate-600 border-slate-200 hover:bg-white"
+                }`}
+              >
+                📅 รายสัปดาห์
+              </button>
+            )}
           </div>
         </div>
 
         {/* Dropdown ประเภทย่อย */}
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-1.5">
-            2. ระบุหน่วย / ภาคเรียน / สัปดาห์
+            2. ระบุหน่วย / ภาคเรียน {teacherProfileConfig.allowWeek ? "/ สัปดาห์" : ""}
           </label>
           {scopeType === "term" && (
             <select
@@ -213,9 +360,11 @@ export default function SubmitPlanPage() {
               onChange={(e) => setScopeValue(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800"
             >
-              <option value="รายภาคเรียน (รวมเล่มเทอม 2/2569)">ส่งรวมเล่ม รายภาคเรียนที่ 2/2569 (1 ครั้ง/วิชา/เทอม)</option>
-              <option value="รายภาคเรียน (รวมเล่มเทอม 1/2569)">ส่งรวมเล่ม รายภาคเรียนที่ 1/2569 (1 ครั้ง/วิชา/เทอม)</option>
-              <option value="รายปีการศึกษา (รวมเล่มตลอดปี 2569)">ส่งรวมเล่ม ตลอดปีการศึกษา 2569</option>
+              {TERM_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
             </select>
           )}
 
@@ -233,15 +382,15 @@ export default function SubmitPlanPage() {
             </select>
           )}
 
-          {scopeType === "week" && (
+          {scopeType === "week" && teacherProfileConfig.allowWeek && (
             <select
               value={scopeValue}
               onChange={(e) => setScopeValue(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800"
             >
-              {Array.from({ length: 20 }, (_, i) => (
-                <option key={i + 1} value={`สัปดาห์ที่ ${i + 1}`}>
-                  สัปดาห์ที่ {i + 1}
+              {WEEK_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
                 </option>
               ))}
             </select>
@@ -265,22 +414,110 @@ export default function SubmitPlanPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">รายวิชา</label>
-            <input
-              type="text"
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              3. รายวิชา / แผนการจัดการเรียนรู้{" "}
+              <span className="font-normal text-pink-700">{teacherProfileConfig.subjectHint}</span>
+            </label>
+            <select
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800 font-medium"
-            />
+            >
+              {teacherProfileConfig.mode === "early" &&
+                EARLY_SUBJECTS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+
+              {(teacherProfileConfig.mode === "elem" || teacherProfileConfig.mode === "p1") &&
+                ELEM_SUBJECTS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+
+              {teacherProfileConfig.mode === "admin" && (
+                <>
+                  <optgroup label="ระดับปฐมวัย">
+                    {EARLY_SUBJECTS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="ระดับประถมศึกษา">
+                    {ELEM_SUBJECTS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                </>
+              )}
+
+              <option value="__CUSTOM__">อื่นๆ (พิมพ์ระบุชื่อวิชาเอง)...</option>
+            </select>
+
+            {subject === "__CUSTOM__" && (
+              <input
+                type="text"
+                required
+                value={customSubject}
+                onChange={(e) => setCustomSubject(e.target.value)}
+                placeholder="พิมพ์ชื่อรายวิชาเพิ่มเติม..."
+                className="mt-2 w-full px-4 py-2 rounded-xl text-sm glass-input text-slate-800"
+              />
+            )}
           </div>
+
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">ระดับชั้น</label>
-            <input
-              type="text"
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              4. ระดับชั้น{" "}
+              <span className="font-normal text-pink-700">{teacherProfileConfig.classHint}</span>
+            </label>
+            <select
               value={classLevel}
               onChange={(e) => setClassLevel(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800 font-medium"
-            />
+            >
+              {teacherProfileConfig.mode === "early" &&
+                EARLY_CLASSES.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+
+              {teacherProfileConfig.mode === "p1" && (
+                <option value="ป.1">ประถมศึกษาปีที่ 1 (ป.1) - เฉพาะชั้น ป.1</option>
+              )}
+
+              {teacherProfileConfig.mode === "elem" &&
+                ELEM_CLASSES.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+
+              {teacherProfileConfig.mode === "admin" && (
+                <>
+                  <optgroup label="ระดับปฐมวัย">
+                    {EARLY_CLASSES.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="ระดับประถมศึกษา">
+                    {ELEM_CLASSES.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                </>
+              )}
+            </select>
           </div>
         </div>
 
