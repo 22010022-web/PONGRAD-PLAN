@@ -161,6 +161,13 @@ BEGIN
     SELECT id INTO v_teacher_id FROM public.teachers WHERE name = (new.raw_user_meta_data->>'teacher_name') LIMIT 1;
   END IF;
 
+  -- ป้องกันสิทธิ์ 1 อีเมล ต่อ 1 ชื่อครู: หากชื่อครูถูกผูกบัญชีแล้ว ห้ามผูกซ้ำ
+  IF v_teacher_id IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.profiles WHERE teacher_id = v_teacher_id AND id <> new.id
+  ) THEN
+    v_teacher_id := NULL;
+  END IF;
+
   INSERT INTO public.profiles (id, email, full_name, role, teacher_id)
   VALUES (new.id, new.email, v_full_name, v_role, v_teacher_id)
   ON CONFLICT (id) DO UPDATE SET

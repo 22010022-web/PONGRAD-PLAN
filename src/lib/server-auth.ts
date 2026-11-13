@@ -45,6 +45,15 @@ export async function requireUser(req: Request, opts: { admin?: boolean } = {}):
   return { user: data.user, profile: (profile as AuthedContext["profile"]) ?? null, supabase };
 }
 
+export function createAdminSupabase(): SupabaseClient | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) return null;
+  return createClient(url, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
 export function errorResponse(err: unknown, fallback = "เกิดข้อผิดพลาดในเซิร์ฟเวอร์") {
   if (err instanceof HttpError) {
     return NextResponse.json({ error: err.message }, { status: err.status });

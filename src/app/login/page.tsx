@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
-import { supabase, getSupabaseProjectRef } from "@/lib/supabase/client";
+import { supabase } from "@/lib/supabase/client";
 import { Teacher } from "@/types/database";
 import {
   Lock,
@@ -22,14 +22,16 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [selectedTeacherId, setSelectedTeacherId] = useState("");
+  const [signupTeacherId, setSignupTeacherId] = useState("");
+  const [forgotTeacherId, setForgotTeacherId] = useState("");
 
   const [teachersList, setTeachersList] = useState<Teacher[]>([]);
+  const [registeredTeacherIds, setRegisteredTeacherIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
-  const projectRef = getSupabaseProjectRef();
+  const availableTeachers = teachersList.filter((t) => !registeredTeacherIds.includes(t.id));
 
   useEffect(() => {
     if (user) {
@@ -37,20 +39,38 @@ export default function LoginPage() {
     }
   }, [user, router]);
 
-  useEffect(() => {
-    async function loadTeachers() {
-      if (isConfigured) {
-        const { data } = await supabase
-          .from("teachers")
-          .select("*")
-          .order("display_order", { ascending: true });
-        if (data && data.length > 0) {
-          setTeachersList(data as Teacher[]);
-          setSelectedTeacherId(data[0].id);
-        }
+  const loadTeachersAndRegistrations = async () => {
+    if (!isConfigured) return;
+    const [{ data: teachersData }, { data: profilesData }] = await Promise.all([
+      supabase
+        .from("teachers")
+        .select("*")
+        .eq("is_active", true)
+        .order("display_order", { ascending: true }),
+      supabase
+        .from("profiles")
+        .select("teacher_id")
+        .not("teacher_id", "is", null),
+    ]);
+
+    if (teachersData) {
+      setTeachersList(teachersData as Teacher[]);
+      if (teachersData.length > 0) {
+        setForgotTeacherId((prev) => prev || teachersData[0].id);
       }
     }
-    loadTeachers();
+
+    if (profilesData) {
+      const boundIds = profilesData
+        .map((p: { teacher_id: string | null }) => p.teacher_id)
+        .filter((id): id is string => Boolean(id));
+      setRegisteredTeacherIds(boundIds);
+      setSignupTeacherId((prev) => (prev && boundIds.includes(prev) ? "" : prev));
+    }
+  };
+
+  useEffect(() => {
+    loadTeachersAndRegistrations();
   }, [isConfigured]);
 
   const handleSignIn = async (e: React.FormEvent) => {
@@ -75,6 +95,12 @@ export default function LoginPage() {
     setErrorMsg("");
     setSuccessMsg("");
 
+    if (!signupTeacherId) {
+      setErrorMsg("กรุณาเลือกชื่อครูของท่านในระบบ");
+      setLoading(false);
+      return;
+    }
+
     if (password !== confirmPassword) {
       setErrorMsg("รหัสผ่านและการยืนยันรหัสผ่านไม่ตรงกัน");
       setLoading(false);
@@ -87,31 +113,66 @@ export default function LoginPage() {
       return;
     }
 
-    const matchedTeacher = teachersList.find((t) => t.id === selectedTeacherId);
+    const matchedTeacher = availableTeachers.find((t) => t.id === signupTeacherId);
     if (!matchedTeacher) {
-      setErrorMsg("กรุณาเลือกชื่อครูในระบบ");
+      setErrorMsg("รายชื่อครูท่านนี้มีผู้ลงทะเบียนรับสิทธิ์ไปแล้ว หรือถูกปิดใช้งาน");
+      await loadTeachersAndRegistrations();
       setLoading(false);
       return;
     }
 
-    const { error } = await signUp(
-      email,
-      password,
-      matchedTeacher.name,
-      "teacher",
-      selectedTeacherId,
-      matchedTeacher.name
-    );
+    try {
+      const res = await fetch("/api/auth/register-teacher", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          password,
+          teacherId: signupTeacherId,
+        }),
+      });
+      const data = await res.json();
 
-    setLoading(false);
+      if (!res.ok) {
+        setErrorMsg(data.error || "ไม่สามารถลงทะเบียนได้");
+        await loadTeachersAndRegistrations();
+        setLoading(false);
+        return;
+      }
 
-    if (error) {
-      setErrorMsg(error.message);
-    } else {
+      if (data.fallbackClientSignUp) {
+        const { error } = await signUp(
+          email,
+          password,
+          matchedTeacher.name,
+          "teacher",
+          signupTeacherId,
+          matchedTeacher.name
+        );
+        if (error) {
+          setErrorMsg(error.message);
+          setLoading(false);
+          return;
+        }
+      } else {
+        const { error: signInErr } = await signIn(email.trim().toLowerCase(), password);
+        if (signInErr) {
+          setSuccessMsg("ลงทะเบียนบัญชีเรียบร้อยแล้ว! กรุณาเข้าสู่ระบบด้วยอีเมลและรหัสผ่านที่ตั้งไว้");
+          setMode("signin");
+          await loadTeachersAndRegistrations();
+          setLoading(false);
+          return;
+        }
+      }
+
       setSuccessMsg("ลงทะเบียนสำเร็จและเข้าสู่ระบบเรียบร้อยแล้ว กำลังนำท่านเข้าสู่ระบบ...");
       setTimeout(() => {
         router.push("/");
       }, 1500);
+    } catch (err: any) {
+      setErrorMsg(err?.message || "เกิดข้อผิดพลาดในการลงทะเบียน");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -133,10 +194,16 @@ export default function LoginPage() {
       return;
     }
 
+    if (!forgotTeacherId) {
+      setErrorMsg("กรุณาเลือกชื่อครูของท่าน");
+      setLoading(false);
+      return;
+    }
+
     try {
       const { data, error } = await supabase.rpc("reset_teacher_password", {
         p_email: email.trim().toLowerCase(),
-        p_teacher_id: selectedTeacherId,
+        p_teacher_id: forgotTeacherId,
         p_new_password: password,
       });
 
@@ -201,6 +268,7 @@ export default function LoginPage() {
             setMode("signup");
             setErrorMsg("");
             setSuccessMsg("");
+            loadTeachersAndRegistrations();
           }}
           className={`py-2 text-xs font-bold rounded-xl transition-all ${
             mode === "signup"
@@ -284,79 +352,109 @@ export default function LoginPage() {
 
       {mode === "signup" && (
         <form onSubmit={handleSignUp} className="space-y-4">
-          <div className="p-3 rounded-2xl bg-pink-50 border border-pink-200 text-[11px] text-pink-800 font-medium">
-            สำหรับครูผู้สอนที่ยังไม่มีบัญชีเข้าใช้งาน (หากลืมรหัสผ่าน กด &quot;ลืมรหัสผ่าน?&quot; ในหน้าเข้าสู่ระบบ)
+          <div className="p-3 rounded-2xl bg-pink-50 border border-pink-200 text-[11px] text-pink-800 font-medium leading-relaxed">
+            จำกัดสิทธิ์ <span className="font-bold">1 อีเมล ต่อ 1 ชื่อครู</span> — รายชื่อที่ลงทะเบียนแล้วจะถูกซ่อนอัตโนมัติ (หากมีครูใหม่ ผอ./แอดมิน สามารถเพิ่มรายชื่อได้ในหน้าจัดการระบบ)
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              เลือกชื่อครูในระบบ (9 ท่าน)
-            </label>
-            <select
-              value={selectedTeacherId}
-              onChange={(e) => setSelectedTeacherId(e.target.value)}
-              className="w-full px-3 py-2.5 rounded-xl text-xs glass-input font-medium"
-            >
-              {teachersList.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.grade_level})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">อีเมลสำหรับล็อกอิน</label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your-name@pongrad.ac.th หรือ gmail..."
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs glass-input"
-              />
+          {availableTeachers.length === 0 ? (
+            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1">
+              <p className="font-bold">รายชื่อครูทั้งหมดมีบัญชีลงทะเบียนครบแล้ว</p>
+              <p className="text-[11px] text-amber-800 leading-relaxed">
+                หากลืมรหัสผ่าน กรุณากดแท็บ &quot;เข้าสู่ระบบ&quot; แล้วเลือก &quot;ลืมรหัสผ่าน?&quot; หรือหากมีครูมาใหม่ ให้ ผอ./ผู้ดูแลระบบเพิ่มรายชื่อในหน้าจัดการระบบ แล้วรายชื่อจะแสดงที่นี่เพื่อลงทะเบียนรับสิทธิ์ครับ
+              </p>
             </div>
-          </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  เลือกชื่อครูในระบบ (ว่างสำหรับรับสิทธิ์ {availableTeachers.length} ท่าน)
+                </label>
+                <select
+                  required
+                  value={signupTeacherId}
+                  onChange={(e) => setSignupTeacherId(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl text-xs glass-input font-medium"
+                >
+                  <option value="">-- กรุณาเลือกชื่อครูของท่าน --</option>
+                  {availableTeachers.some((t) => t.category === "early_childhood") && (
+                    <optgroup label="กลุ่มที่ 1 ครูระดับปฐมวัย">
+                      {availableTeachers
+                        .filter((t) => t.category === "early_childhood")
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name} ({t.grade_level})
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                  {availableTeachers.some((t) => t.category === "primary") && (
+                    <optgroup label="กลุ่มที่ 2 ครูระดับประถมศึกษา">
+                      {availableTeachers
+                        .filter((t) => t.category === "primary")
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name} ({t.grade_level})
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">ตั้งรหัสผ่าน (อย่างน้อย 6 ตัว)</label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs glass-input"
-              />
-            </div>
-          </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">อีเมลสำหรับล็อกอิน</label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="your-name@pongrad.ac.th หรือ gmail..."
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs glass-input"
+                  />
+                </div>
+              </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">ยืนยันรหัสผ่านอีกครั้ง</label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              <input
-                type="password"
-                required
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs glass-input"
-              />
-            </div>
-          </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ตั้งรหัสผ่าน (อย่างน้อย 6 ตัว)</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs glass-input"
+                  />
+                </div>
+              </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-          >
-            {loading ? "กำลังลงทะเบียน..." : "✔ ยืนยันการลงทะเบียน"}
-          </button>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ยืนยันรหัสผ่านอีกครั้ง</label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                  <input
+                    type="password"
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl text-xs glass-input"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !signupTeacherId}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+              >
+                {loading ? "กำลังลงทะเบียน..." : "✔ ยืนยันการลงทะเบียน"}
+              </button>
+            </>
+          )}
         </form>
       )}
 
@@ -384,8 +482,8 @@ export default function LoginPage() {
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">เลือกชื่อครู</label>
             <select
-              value={selectedTeacherId}
-              onChange={(e) => setSelectedTeacherId(e.target.value)}
+              value={forgotTeacherId}
+              onChange={(e) => setForgotTeacherId(e.target.value)}
               className="w-full px-3 py-2.5 rounded-xl text-xs glass-input font-medium"
             >
               {teachersList.map((t) => (

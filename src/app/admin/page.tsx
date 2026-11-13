@@ -20,6 +20,7 @@ import {
   RotateCcw,
   Upload,
   X,
+  Unlink,
 } from "lucide-react";
 
 const STATUS_OPTIONS: PlanStatus[] = [
@@ -84,6 +85,9 @@ export default function AdminPage() {
 
   // 2. Teachers management states
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [teacherBindings, setTeacherBindings] = useState<
+    Record<string, { id: string; email: string; role: string }[]>
+  >({});
   const [loadingTeachers, setLoadingTeachers] = useState(true);
   const [teacherModalOpen, setTeacherModalOpen] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
@@ -110,11 +114,26 @@ export default function AdminPage() {
   const loadTeachers = async () => {
     setLoadingTeachers(true);
     try {
-      const { data } = await supabase
-        .from("teachers")
-        .select("*")
-        .order("display_order", { ascending: true });
+      const [{ data }, { data: profilesData }] = await Promise.all([
+        supabase
+          .from("teachers")
+          .select("*")
+          .order("display_order", { ascending: true }),
+        supabase
+          .from("profiles")
+          .select("id, email, role, teacher_id")
+          .not("teacher_id", "is", null),
+      ]);
       if (data) setTeachers(data as Teacher[]);
+      const grouped: Record<string, { id: string; email: string; role: string }[]> = {};
+      if (profilesData) {
+        for (const p of profilesData as { id: string; email: string; role: string; teacher_id: string | null }[]) {
+          if (!p.teacher_id) continue;
+          if (!grouped[p.teacher_id]) grouped[p.teacher_id] = [];
+          grouped[p.teacher_id].push({ id: p.id, email: p.email, role: p.role });
+        }
+      }
+      setTeacherBindings(grouped);
     } finally {
       setLoadingTeachers(false);
     }
@@ -282,6 +301,40 @@ export default function AdminPage() {
       await loadPlans();
     } catch (err: any) {
       setAlert({ type: "error", text: err?.message || "ลบรายชื่อครูไม่สำเร็จ" });
+    }
+  };
+
+  const handleUnlinkTeacherAccount = async (t: Teacher, emailsLabel: string) => {
+    const confirmed = window.confirm(
+      `ปลดล็อกสิทธิ์บัญชีของ "${t.name}" (${emailsLabel}) ใช่หรือไม่?\n\nเมื่อปลดล็อกแล้ว บัญชีครูเดิมจะถูกลบออกจากระบบ (ประวัติแผนเดิมยังคงอยู่) และชื่อครู "${t.name}" จะกลับมาแสดงในหน้าลงทะเบียนผู้ใช้ใหม่เพื่อให้สมัครรับสิทธิ์ด้วยอีเมลใหม่ได้`
+    );
+    if (!confirmed) return;
+
+    setAlert(null);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่");
+
+      const res = await fetch("/api/admin/unlink-teacher", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ teacherId: t.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "ปลดล็อกสิทธิ์ไม่สำเร็จ");
+
+      setAlert({
+        type: "success",
+        text: `ปลดล็อกสิทธิ์ของ "${t.name}" แล้ว ชื่อครูพร้อมให้ลงทะเบียนใหม่ได้ทันที`,
+      });
+      await loadTeachers();
+    } catch (err: any) {
+      setAlert({ type: "error", text: err?.message || "ปลดล็อกสิทธิ์ไม่สำเร็จ" });
     }
   };
 
@@ -573,12 +626,16 @@ export default function AdminPage() {
                     <th className="py-2.5 px-3">ชื่อย่อ</th>
                     <th className="py-2.5 px-3">ระดับชั้น</th>
                     <th className="py-2.5 px-3">วิชาหลัก</th>
+                    <th className="py-2.5 px-3">บัญชีที่ลงทะเบียน</th>
                     <th className="py-2.5 px-3 text-center">สถานะ</th>
                     <th className="py-2.5 px-3 text-right">จัดการ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {teachers.map((t) => (
+                  {teachers.map((t) => {
+                    const boundList = teacherBindings[t.id] || [];
+                    const boundEmails = boundList.map((b) => b.email).join(", ");
+                    return (
                     <tr key={t.id} className={!t.is_active ? "opacity-55 bg-slate-50/60" : ""}>
                       <td className="py-2.5 px-3 font-semibold">{t.display_order}</td>
                       <td className="py-2.5 px-3 font-bold text-slate-900">{t.name}</td>
@@ -589,6 +646,20 @@ export default function AdminPage() {
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-xs">{t.default_subject || "-"}</td>
+                      <td className="py-2.5 px-3 text-xs">
+                        {boundList.length > 0 ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-bold text-[11px] border border-blue-200">
+                              ลงทะเบียนแล้ว
+                            </span>
+                            <div className="text-[11px] text-slate-500 break-all">{boundEmails}</div>
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 font-semibold text-[11px] border border-amber-200">
+                            รอครูลงทะเบียน
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-3 text-center">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
@@ -602,6 +673,16 @@ export default function AdminPage() {
                       </td>
                       <td className="py-2.5 px-3 text-right">
                         <div className="inline-flex items-center gap-1">
+                          {boundList.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleUnlinkTeacherAccount(t, boundEmails)}
+                              title="ปลดล็อกสิทธิ์ (เปิดให้ลงทะเบียนใหม่ได้)"
+                              className="p-1.5 rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100"
+                            >
+                              <Unlink className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => openEditTeacher(t)}
@@ -633,7 +714,8 @@ export default function AdminPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
