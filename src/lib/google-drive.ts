@@ -7,26 +7,95 @@ import { drive as driveApi, auth as gauth } from "@googleapis/drive";
 export const DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"];
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
+function normalizePrivateKey(key: string): string {
+  return key.replace(/\\n/g, "\n").trim();
+}
+
+function extractServiceAccountFromRaw(
+  raw: string
+): { client_email: string; private_key: string } | null {
+  let trimmed = raw.trim();
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+
+  const text = trimmed.startsWith("{")
+    ? trimmed
+    : Buffer.from(trimmed, "base64").toString("utf8").trim();
+
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.client_email && parsed?.private_key) {
+      return {
+        client_email: String(parsed.client_email).trim(),
+        private_key: normalizePrivateKey(String(parsed.private_key)),
+      };
+    }
+  } catch {
+    // Fall back to repairing unquoted URLs / extracting required fields
+  }
+
+  try {
+    const repaired = text.replace(
+      /:\s*(https?:\/\/[^,\s}"']+)"?/g,
+      (_m, url) => `: "${url}"`
+    );
+    const parsed = JSON.parse(repaired);
+    if (parsed?.client_email && parsed?.private_key) {
+      return {
+        client_email: String(parsed.client_email).trim(),
+        private_key: normalizePrivateKey(String(parsed.private_key)),
+      };
+    }
+  } catch {
+    // Fall back to direct PEM/email extraction
+  }
+
+  const emailMatch =
+    /"client_email"\s*:\s*"?([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)"?/.exec(
+      text
+    );
+  const keyMatch =
+    /"private_key"\s*:\s*"?(-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----(?:\\n|\s)*)"?/.exec(
+      text
+    );
+  if (emailMatch?.[1] && keyMatch?.[1]) {
+    return {
+      client_email: emailMatch[1].trim(),
+      private_key: normalizePrivateKey(keyMatch[1]),
+    };
+  }
+
+  return null;
+}
+
 function getCredentials(): { client_email: string; private_key: string } {
   // แบบที่ 1: วางเนื้อหา credentials.json ทั้งไฟล์ (หรือ base64) ไว้ใน GOOGLE_SERVICE_ACCOUNT_JSON
   const rawJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (rawJson && rawJson.trim()) {
-    const text = rawJson.trim().startsWith("{")
-      ? rawJson
-      : Buffer.from(rawJson.trim(), "base64").toString("utf8");
-    const parsed = JSON.parse(text);
-    return { client_email: parsed.client_email, private_key: parsed.private_key };
+    const extracted = extractServiceAccountFromRaw(rawJson);
+    if (extracted) return extracted;
   }
 
   // แบบที่ 2: แยกเป็น 2 ตัวแปร
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const key = process.env.GOOGLE_PRIVATE_KEY;
-  if (!email || !key) {
+  if (email && key) {
+    return { client_email: email.trim(), private_key: normalizePrivateKey(key) };
+  }
+
+  if (rawJson && rawJson.trim()) {
     throw new Error(
-      "ยังไม่ได้ตั้งค่า Google Service Account บนเซิร์ฟเวอร์ (GOOGLE_SERVICE_ACCOUNT_JSON หรือ GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY)"
+      "รูปแบบ JSON ใน GOOGLE_SERVICE_ACCOUNT_JSON ไม่ถูกต้อง (แนะนำให้ใส่เฉพาะ JSON ต้นฉบับ หรือแยกใช้ GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY)"
     );
   }
-  return { client_email: email, private_key: key.replace(/\\n/g, "\n") };
+
+  throw new Error(
+    "ยังไม่ได้ตั้งค่า Google Service Account บนเซิร์ฟเวอร์ (GOOGLE_SERVICE_ACCOUNT_JSON หรือ GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY)"
+  );
 }
 
 let cachedAuth: InstanceType<typeof gauth.GoogleAuth> | null = null;
@@ -51,9 +120,13 @@ export async function getAccessToken(): Promise<string> {
 }
 
 export function getRootFolderId(): string {
-  const id = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  if (!id) throw new Error("ยังไม่ได้ตั้งค่า GOOGLE_DRIVE_FOLDER_ID");
-  return id;
+  const raw = process.env.GOOGLE_DRIVE_FOLDER_ID?.trim();
+  if (!raw) throw new Error("ยังไม่ได้ตั้งค่า GOOGLE_DRIVE_FOLDER_ID");
+  const folderMatch = /\/folders\/([a-zA-Z0-9_-]+)/.exec(raw);
+  if (folderMatch?.[1]) return folderMatch[1];
+  const idMatch = /[?&]id=([a-zA-Z0-9_-]+)/.exec(raw);
+  if (idMatch?.[1]) return idMatch[1];
+  return raw;
 }
 
 export function extractDriveFileId(url?: string | null): string | null {
