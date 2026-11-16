@@ -979,7 +979,7 @@ export default function AdminPage() {
 
       {/* Modal Add/Edit Teacher */}
       {teacherModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
           <div className="max-w-md w-full glass-panel rounded-3xl p-6 border border-white/80 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <h3 className="font-display font-bold text-lg text-slate-800">

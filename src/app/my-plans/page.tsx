@@ -596,7 +596,7 @@ export default function MyPlansPage() {
 
       {/* Modal ส่งบันทึกหลังสอน */}
       {selectedPlanForPost && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
           <div className="max-w-md w-full glass-panel rounded-3xl p-6 border border-white/80 shadow-2xl space-y-4">
             <h3 className="font-display font-bold text-lg text-slate-800">
               ส่งบันทึกหลังการสอน
@@ -718,7 +718,7 @@ export default function MyPlansPage() {
       )}
       {/* Modal อัปโหลดไฟล์ฉบับแก้ไขแทนไฟล์เดิม */}
       {selectedPlanForRevise && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
           <div className="max-w-md w-full glass-panel rounded-3xl p-6 border border-white/80 shadow-2xl space-y-4">
             <h3 className="font-display font-bold text-lg text-slate-800">
               {selectedPlanForRevise.status === "บันทึกต้องแก้ไข"

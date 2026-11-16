@@ -344,7 +344,7 @@ export default function ReviewPage() {
 
       {/* Review & Interactive Stamp Modal */}
       {selectedPlan && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/50 backdrop-blur-sm">
+        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="max-w-6xl w-full glass-panel rounded-3xl p-4 sm:p-6 border border-white/80 shadow-2xl space-y-4 max-h-[95vh] overflow-y-auto">
             <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-3">
               <div>

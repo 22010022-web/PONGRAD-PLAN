@@ -1319,7 +1319,7 @@ export function DirectorStampCanvas({
 
       {/* Modal สำหรับวาดลายเซ็น ผอ. (รองรับน้ำหนักกดปากกา iPad เช่นกัน) */}
       {showDrawModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+        <div className="fixed inset-0 !mt-0 z-[70] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl p-5 max-w-md w-full shadow-2xl space-y-3 border border-slate-200">
             <div className="flex items-center justify-between">
               <h5 className="text-sm font-bold text-slate-800">
