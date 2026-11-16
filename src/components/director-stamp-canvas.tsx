@@ -5,14 +5,19 @@ import {
   ChevronLeft,
   ChevronRight,
   Eraser,
+  Hand,
   ImageUp,
   Loader2,
+  Maximize2,
+  Minimize2,
   Move,
   PenLine,
   PenTool,
   RotateCcw,
   Trash2,
   Undo2,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
@@ -25,7 +30,7 @@ function extractDriveFileId(url?: string | null): string | null {
   return null;
 }
 
-const CANVAS_W = 1240;
+const CANVAS_W = 1654; // ความละเอียดสูง (A4 ~200 DPI) เพื่อเวลาซูม 200-300% ตัวหนังสือและเส้นปากกายังคมชัด
 const MM_TO_PX = CANVAS_W / 210; // A4 width = 210mm
 const BLUE_INK = "#1a2fa0";
 
@@ -84,10 +89,116 @@ const DEFAULT_SIG_LAYOUT: SigLayoutState = {
   showSignatureOnDoc: true,
 };
 
+interface StrokePoint {
+  xMm: number;
+  yMm: number;
+  p: number; // น้ำหนักกดปากกา (0.25 .. 1.65)
+  t?: number;
+}
+
 interface PenStroke {
   color: string;
-  widthPx: number;
-  points: { xMm: number; yMm: number }[];
+  baseWidthMm: number; // ความหนาพื้นฐานในหน่วย mm
+  points: StrokePoint[];
+}
+
+/**
+ * คำนวณน้ำหนักเส้นปากกาจากแรงกดจริงของ Apple Pencil (e.pressure)
+ * หรือความเร็วการลากกรณีใช้เมาส์/นิ้วที่ไม่ส่งค่าแรงกดหลายระดับ
+ */
+function computePointPressure(
+  pointerType: string,
+  rawPressure: number,
+  prevPoint?: StrokePoint,
+  xMm?: number,
+  yMm?: number,
+  nowMs?: number
+): number {
+  if (pointerType === "pen" && rawPressure > 0 && rawPressure !== 0.5) {
+    // Apple Pencil / Stylus: ขยายช่วงแรงกดให้เห็นเส้นหนัก-เบาชัดเจนเหมือนปากกาหมึกซึม
+    return Math.max(0.28, Math.min(1.65, 0.3 + Math.pow(rawPressure, 0.85) * 1.35));
+  }
+
+  // กรณีเมาส์หรือนิ้ว: ปรับน้ำหนักเส้นตามความเร็วการตวัดปากกาอย่างเป็นธรรมชาติ + เฉลี่ยให้สมูท
+  if (prevPoint && xMm !== undefined && yMm !== undefined && nowMs && prevPoint.t) {
+    const dt = Math.max(4, nowMs - prevPoint.t);
+    const distMm = Math.hypot(xMm - prevPoint.xMm, yMm - prevPoint.yMm);
+    const speed = distMm / dt; // mm per ms
+    const targetP = Math.max(0.45, Math.min(1.25, 1.18 - speed * 0.45));
+    return prevPoint.p * 0.65 + targetP * 0.35;
+  }
+
+  return 0.95;
+}
+
+/**
+ * วาดเส้นปากกาแบบมีน้ำหนักหนัก-เบาตามแรงกด (Variable-Width Smooth Curve)
+ */
+function renderPressureStroke(
+  ctx: CanvasRenderingContext2D,
+  stroke: PenStroke,
+  mmToPx: number
+) {
+  const pts = stroke.points;
+  if (!pts || pts.length === 0) return;
+
+  ctx.save();
+  ctx.strokeStyle = stroke.color;
+  ctx.fillStyle = stroke.color;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const basePx = Math.max(1.2, stroke.baseWidthMm * mmToPx);
+
+  if (pts.length === 1) {
+    const r = (basePx * (pts[0].p || 1)) / 2;
+    ctx.beginPath();
+    ctx.arc(pts[0].xMm * mmToPx, pts[0].yMm * mmToPx, Math.max(0.8, r), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  if (pts.length === 2) {
+    const pAvg = ((pts[0].p || 1) + (pts[1].p || 1)) / 2;
+    ctx.lineWidth = Math.max(1, basePx * pAvg);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].xMm * mmToPx, pts[0].yMm * mmToPx);
+    ctx.lineTo(pts[1].xMm * mmToPx, pts[1].yMm * mmToPx);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // วาดเส้นโค้ง Quadratic Bezier ทีละช่วงเพื่อให้เปลี่ยนความหนาตามน้ำหนักกดปากกาได้อย่างนุ่มนวล
+  for (let i = 1; i < pts.length; i++) {
+    const p0 = pts[i - 1];
+    const p1 = pts[i];
+    const pPrev = i >= 2 ? pts[i - 2] : p0;
+
+    const startX = ((pPrev.xMm + p0.xMm) / 2) * mmToPx;
+    const startY = ((pPrev.yMm + p0.yMm) / 2) * mmToPx;
+    const ctrlX = p0.xMm * mmToPx;
+    const ctrlY = p0.yMm * mmToPx;
+    const endX =
+      i === pts.length - 1 ? p1.xMm * mmToPx : ((p0.xMm + p1.xMm) / 2) * mmToPx;
+    const endY =
+      i === pts.length - 1 ? p1.yMm * mmToPx : ((p0.yMm + p1.yMm) / 2) * mmToPx;
+
+    const pressure = ((p0.p || 1) + (p1.p || 1)) / 2;
+    ctx.lineWidth = Math.max(0.9, basePx * pressure);
+
+    ctx.beginPath();
+    if (i === 1) {
+      ctx.moveTo(p0.xMm * mmToPx, p0.yMm * mmToPx);
+    } else {
+      ctx.moveTo(startX, startY);
+    }
+    ctx.quadraticCurveTo(ctrlX, ctrlY, endX, endY);
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
 async function normalizeSignatureToBlueTransparentDataUrl(srcUrl: string): Promise<string> {
@@ -96,7 +207,7 @@ async function normalizeSignatureToBlueTransparentDataUrl(srcUrl: string): Promi
   img.src = srcUrl;
   await img.decode();
 
-  const maxDim = 600;
+  const maxDim = 700;
   const scale = Math.min(1, maxDim / Math.max(img.width, img.height, 1));
   const w = Math.max(1, Math.round(img.width * scale));
   const h = Math.max(1, Math.round(img.height * scale));
@@ -171,11 +282,12 @@ export function DirectorStampCanvas({
   onBindExporter,
 }: DirectorStampCanvasProps) {
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const drawPadRef = useRef<HTMLCanvasElement | null>(null);
   const basePageCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sigImageRef = useRef<HTMLImageElement | null>(null);
 
-  const [canvasHeight, setCanvasHeight] = useState(1754);
+  const [canvasHeight, setCanvasHeight] = useState(Math.round(CANVAS_W * 1.4142));
   const pageHeightsRef = useRef<Record<number, number>>({});
   const [pdfDocProxy, setPdfDocProxy] = useState<any>(null);
   const [totalPages, setTotalPages] = useState(1);
@@ -184,17 +296,29 @@ export function DirectorStampCanvas({
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
-  // โหมดการใช้งานบนกระดาษ: "move-sig" = ย้ายลายเซ็น, "pen" = เขียนข้อความแก้ไขด้วยลายมือบนกระดาษ
-  const [toolMode, setToolMode] = useState<"move-sig" | "pen">("move-sig");
-  const [penColor, setPenColor] = useState("#dc2626"); // สีแดงเริ่มต้นสำหรับเขียนจุดที่ต้องแก้ไข
-  const [penWidth, setPenWidth] = useState(3.8);
+  // ระบบซูมหน้ากระดาษ (+ / -) และขยายเต็มจอสำหรับเขียนบน iPad / จอเล็ก
+  const [zoomPercent, setZoomPercent] = useState(100);
+  const [isFullscreenWorkspace, setIsFullscreenWorkspace] = useState(false);
+  const [ipadPencilOnly, setIpadPencilOnly] = useState(false);
+
+  // โหมดการใช้งานบนกระดาษ: "move-sig" = ย้ายลายเซ็น, "pen" = เขียนด้วยปากกา, "pan" = เลื่อนกระดาษที่ซูม
+  const [toolMode, setToolMode] = useState<"move-sig" | "pen" | "pan">("move-sig");
+  const [penColor, setPenColor] = useState("#dc2626");
+  const [penBaseWidthMm, setPenBaseWidthMm] = useState(0.65);
   const [strokesByPage, setStrokesByPage] = useState<Record<number, PenStroke[]>>({});
   const strokesByPageRef = useRef<Record<number, PenStroke[]>>({});
   const activeStrokeRef = useRef<PenStroke | null>(null);
+  const panStartRef = useRef<{
+    clientX: number;
+    clientY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
 
   const [sigDataUrl, setSigDataUrl] = useState<string | null>(null);
   const [showDrawModal, setShowDrawModal] = useState(false);
-  const isDrawingSigRef = useRef(false);
+  const sigPadStrokesRef = useRef<PenStroke[]>([]);
+  const activeSigPadStrokeRef = useRef<PenStroke | null>(null);
 
   const [signDateIso, setSignDateIso] = useState(() => {
     const d = new Date();
@@ -214,7 +338,6 @@ export function DirectorStampCanvas({
     strokesByPageRef.current = strokesByPage;
   }, [strokesByPage]);
 
-  // โหลดลายเซ็นและพิกัดที่เคยบันทึกไว้ในเครื่อง
   useEffect(() => {
     try {
       const savedSig = localStorage.getItem(STORAGE_SIG_KEY);
@@ -254,7 +377,6 @@ export function DirectorStampCanvas({
     }
   }, []);
 
-  // โหลดไฟล์ PDF จาก Google Drive ผ่าน API
   useEffect(() => {
     let cancelled = false;
     let loadedTask: any = null;
@@ -291,7 +413,7 @@ export function DirectorStampCanvas({
         setPdfDocProxy(pdf);
         setTotalPages(pdf.numPages);
         setPageNumber(1);
-        setSigPageNumber(pdf.numPages); // ค่าเริ่มต้นวางลายเซ็นหน้าสุดท้าย หรือกดย้ายมาหน้าปัจจุบันได้ทันที
+        setSigPageNumber(pdf.numPages);
       } catch (err: any) {
         if (!cancelled) {
           setPdfError(err?.message || "ไม่สามารถโหลดตัวอย่างหน้ากระดาษ PDF ได้");
@@ -346,7 +468,7 @@ export function DirectorStampCanvas({
       const k = MM_TO_PX;
       const cur = layoutRef.current;
 
-      // 1. วาดเส้นลายมือเขียนแก้ไขของ ผอ. ในหน้านี้
+      // 1. วาดเส้นปากกาตามน้ำหนักกด (Pressure-Sensitive Handwriting)
       const pageStrokes = strokesByPageRef.current[targetPage] || [];
       const allStrokes =
         targetPage === pageNumber && activeStrokeRef.current
@@ -354,36 +476,10 @@ export function DirectorStampCanvas({
           : pageStrokes;
 
       for (const stroke of allStrokes) {
-        if (!stroke.points || stroke.points.length === 0) continue;
-        ctx.save();
-        ctx.strokeStyle = stroke.color;
-        ctx.fillStyle = stroke.color;
-        ctx.lineWidth = stroke.widthPx;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-
-        if (stroke.points.length === 1) {
-          ctx.beginPath();
-          ctx.arc(
-            stroke.points[0].xMm * k,
-            stroke.points[0].yMm * k,
-            stroke.widthPx / 2,
-            0,
-            Math.PI * 2
-          );
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.moveTo(stroke.points[0].xMm * k, stroke.points[0].yMm * k);
-          for (let i = 1; i < stroke.points.length; i++) {
-            ctx.lineTo(stroke.points[i].xMm * k, stroke.points[i].yMm * k);
-          }
-          ctx.stroke();
-        }
-        ctx.restore();
+        renderPressureStroke(ctx, stroke, k);
       }
 
-      // 2. วาดลายเซ็น ผอ. (เฉพาะหน้าที่กำหนดให้วางลายเซ็น และเปิดแสดงลายเซ็นอยู่)
+      // 2. วาดลายเซ็น ผอ.
       if (!cur.showSignatureOnDoc || targetPage !== sigPageNumber) {
         return;
       }
@@ -435,14 +531,14 @@ export function DirectorStampCanvas({
       if (showGuides) {
         ctx.save();
         ctx.strokeStyle =
-          toolMode === "move-sig" ? "rgba(219, 39, 119, 0.75)" : "rgba(148, 163, 184, 0.5)";
-        ctx.setLineDash([5, 4]);
-        ctx.lineWidth = 1.8;
-        ctx.strokeRect(sx - 4, sy - 4, cur.w * k + 8, cur.h * k + 8);
+          toolMode === "move-sig" ? "rgba(219, 39, 119, 0.78)" : "rgba(148, 163, 184, 0.5)";
+        ctx.setLineDash([6, 5]);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx - 5, sy - 5, cur.w * k + 10, cur.h * k + 10);
         if (!sigImageRef.current) {
           ctx.fillStyle = "rgba(219, 39, 119, 0.85)";
-          ctx.font = `600 18px Sarabun, sans-serif`;
-          ctx.fillText("กรอบลายเซ็น ผอ. (ลากย้ายได้)", sx + 6, sy + 10);
+          ctx.font = `600 22px Sarabun, sans-serif`;
+          ctx.fillText("กรอบลายเซ็น ผอ. (ลากย้ายได้)", sx + 8, sy + 12);
         }
         ctx.restore();
       }
@@ -477,7 +573,6 @@ export function DirectorStampCanvas({
     renderPreview();
   }, [layout, strokesByPage, sigPageNumber, signDateIso, toolMode, renderPreview]);
 
-  // ส่งออกเฉพาะหน้าที่มีลายมือเขียนแก้ไข หรือมีลายเซ็น ผอ.
   useEffect(() => {
     const exporter = (): DirectorOverlayExport | null => {
       const cur = layoutRef.current;
@@ -529,23 +624,47 @@ export function DirectorStampCanvas({
     }
   };
 
-  const pointerToMm = (e: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
+  const clientCoordsToMm = (clientX: number, clientY: number): [number, number] => {
     const cv = previewCanvasRef.current!;
     const rect = cv.getBoundingClientRect();
-    const xMm = ((e.clientX - rect.left) / Math.max(1, rect.width)) * 210;
-    const yMm = ((e.clientY - rect.top) / Math.max(1, rect.height)) * (canvasHeight / MM_TO_PX);
+    const xMm = ((clientX - rect.left) / Math.max(1, rect.width)) * 210;
+    const yMm =
+      ((clientY - rect.top) / Math.max(1, rect.height)) * (canvasHeight / MM_TO_PX);
     return [xMm, yMm];
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const [x, y] = pointerToMm(e);
+    // หากใช้ Apple Pencil แตะหน้าจอ ให้ตรวจจับและเปิดโหมดแยกนิ้วเลื่อนให้อัตโนมัติได้ หรือสลับมาเขียนได้ทันที
+    const isStylus = e.pointerType === "pen";
+    const isFingerTouch = e.pointerType === "touch";
 
-    if (toolMode === "pen") {
+    // กรณีอยู่ในโหมดเลื่อนกระดาษ (pan) หรือเปิดโหมด iPad (ใช้นิ้วเลื่อน / ใช้ปากกาเขียน) แล้วแตะด้วยนิ้ว
+    if (toolMode === "pan" || (toolMode === "pen" && ipadPencilOnly && isFingerTouch)) {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      panStartRef.current = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        scrollLeft: container.scrollLeft,
+        scrollTop: container.scrollTop,
+      };
       e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    const [x, y] = clientCoordsToMm(e.clientX, e.clientY);
+
+    if (toolMode === "pen" || isStylus) {
+      if (isStylus && toolMode !== "pen") {
+        setToolMode("pen");
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const now = performance.now();
+      const p = computePointPressure(e.pointerType, e.pressure, undefined, x, y, now);
       activeStrokeRef.current = {
         color: penColor,
-        widthPx: penWidth,
-        points: [{ xMm: x, yMm: y }],
+        baseWidthMm: penBaseWidthMm,
+        points: [{ xMm: x, yMm: y, p, t: now }],
       };
       renderPreview();
       return;
@@ -554,7 +673,6 @@ export function DirectorStampCanvas({
     const cur = layoutRef.current;
     if (!cur.showSignatureOnDoc) return;
 
-    // หากคลิกในโหมดย้ายลายเซ็นบนหน้าอื่น หรือคลิกที่กรอบลายเซ็น
     const inSigBox =
       pageNumber === sigPageNumber &&
       x >= cur.x - 4 &&
@@ -566,7 +684,6 @@ export function DirectorStampCanvas({
       dragSigRef.current = { dx: x - cur.x, dy: y - cur.y };
       e.currentTarget.setPointerCapture(e.pointerId);
     } else if (pageNumber !== sigPageNumber) {
-      // ถ้าย้ายมาหน้าอื่นแล้วแตะวางในโหมดย้ายลายเซ็น ให้ดึงลายเซ็นมาหน้านี้ทันที
       setSigPageNumber(pageNumber);
       const next = {
         ...cur,
@@ -581,16 +698,48 @@ export function DirectorStampCanvas({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const [x, y] = pointerToMm(e);
+    if (panStartRef.current) {
+      const container = scrollContainerRef.current;
+      if (container) {
+        container.scrollLeft =
+          panStartRef.current.scrollLeft - (e.clientX - panStartRef.current.clientX);
+        container.scrollTop =
+          panStartRef.current.scrollTop - (e.clientY - panStartRef.current.clientY);
+      }
+      return;
+    }
 
-    if (toolMode === "pen") {
-      if (!activeStrokeRef.current) return;
-      activeStrokeRef.current.points.push({ xMm: x, yMm: y });
+    if (activeStrokeRef.current) {
+      const stroke = activeStrokeRef.current;
+      const coalesced: PointerEvent[] =
+        typeof (e.nativeEvent as any).getCoalescedEvents === "function"
+          ? (e.nativeEvent as any).getCoalescedEvents()
+          : [e.nativeEvent];
+
+      for (const ev of coalesced) {
+        const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY);
+        const lastPt = stroke.points[stroke.points.length - 1];
+        if (lastPt && Math.hypot(cx - lastPt.xMm, cy - lastPt.yMm) < 0.08) {
+          continue;
+        }
+        const now = performance.now();
+        const p = computePointPressure(
+          ev.pointerType || e.pointerType,
+          ev.pressure ?? e.pressure,
+          lastPt,
+          cx,
+          cy,
+          now
+        );
+        stroke.points.push({ xMm: cx, yMm: cy, p, t: now });
+      }
+
       renderPreview();
       return;
     }
 
     if (!dragSigRef.current) return;
+    const [x, y] = clientCoordsToMm(e.clientX, e.clientY);
     const { dx, dy } = dragSigRef.current;
     const nextX = Math.max(2, Math.min(195, x - dx));
     const nextY = Math.max(2, Math.min(285, y - dy));
@@ -603,7 +752,12 @@ export function DirectorStampCanvas({
   };
 
   const handlePointerUp = () => {
-    if (toolMode === "pen" && activeStrokeRef.current) {
+    if (panStartRef.current) {
+      panStartRef.current = null;
+      return;
+    }
+
+    if (activeStrokeRef.current) {
       const finished = activeStrokeRef.current;
       activeStrokeRef.current = null;
       setStrokesByPage((prev) => {
@@ -655,35 +809,60 @@ export function DirectorStampCanvas({
     }
   };
 
+  // --- กระดานวาดลายเซ็น ผอ. แบบรองรับแรงกดปากกา iPad ---
+  const renderSigPadCanvas = () => {
+    const cv = drawPadRef.current;
+    const ctx = cv?.getContext("2d");
+    if (!cv || !ctx) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const all = activeSigPadStrokeRef.current
+      ? [...sigPadStrokesRef.current, activeSigPadStrokeRef.current]
+      : sigPadStrokesRef.current;
+    for (const s of all) {
+      renderPressureStroke(ctx, s, 4);
+    }
+  };
+
   const startDrawSig = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const cv = drawPadRef.current;
     if (!cv) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = cv.getBoundingClientRect();
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-    ctx.strokeStyle = BLUE_INK;
-    ctx.lineWidth = 3.2;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
-    isDrawingSigRef.current = true;
+    const xMm = ((e.clientX - rect.left) / Math.max(1, rect.width)) * (cv.width / 4);
+    const yMm = ((e.clientY - rect.top) / Math.max(1, rect.height)) * (cv.height / 4);
+    const now = performance.now();
+    const p = computePointPressure(e.pointerType, e.pressure, undefined, xMm, yMm, now);
+    activeSigPadStrokeRef.current = {
+      color: BLUE_INK,
+      baseWidthMm: 0.9,
+      points: [{ xMm, yMm, p, t: now }],
+    };
+    renderSigPadCanvas();
   };
 
   const moveDrawSig = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDrawingSigRef.current) return;
     const cv = drawPadRef.current;
-    if (!cv) return;
+    const stroke = activeSigPadStrokeRef.current;
+    if (!cv || !stroke) return;
     const rect = cv.getBoundingClientRect();
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-    ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
-    ctx.stroke();
+    const xMm = ((e.clientX - rect.left) / Math.max(1, rect.width)) * (cv.width / 4);
+    const yMm = ((e.clientY - rect.top) / Math.max(1, rect.height)) * (cv.height / 4);
+    const lastPt = stroke.points[stroke.points.length - 1];
+    const now = performance.now();
+    const p = computePointPressure(e.pointerType, e.pressure, lastPt, xMm, yMm, now);
+    stroke.points.push({ xMm, yMm, p, t: now });
+    renderSigPadCanvas();
   };
 
   const endDrawSig = () => {
-    isDrawingSigRef.current = false;
+    if (activeSigPadStrokeRef.current) {
+      sigPadStrokesRef.current = [
+        ...sigPadStrokesRef.current,
+        activeSigPadStrokeRef.current,
+      ];
+      activeSigPadStrokeRef.current = null;
+      renderSigPadCanvas();
+    }
   };
 
   const saveDrawnSig = () => {
@@ -700,54 +879,74 @@ export function DirectorStampCanvas({
   };
 
   const clearDrawnPad = () => {
-    const cv = drawPadRef.current;
-    const ctx = cv?.getContext("2d");
-    if (cv && ctx) ctx.clearRect(0, 0, cv.width, cv.height);
+    sigPadStrokesRef.current = [];
+    activeSigPadStrokeRef.current = null;
+    renderSigPadCanvas();
   };
 
   const currentPageStrokeCount = (strokesByPage[pageNumber] || []).length;
+  const baseDisplayWidth = isFullscreenWorkspace ? 760 : 540;
+  const zoomedWidthPx = Math.round((baseDisplayWidth * zoomPercent) / 100);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-      {/* ฝั่งซ้าย: โหมดเขียนแก้ไขด้วยลายมือ & ลายเซ็น ผอ. */}
+    <div
+      className={
+        isFullscreenWorkspace
+          ? "fixed inset-2 z-[55] bg-slate-100 rounded-3xl p-4 shadow-2xl border border-slate-300 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 gap-4 items-start"
+          : "grid grid-cols-1 lg:grid-cols-12 gap-4 items-start"
+      }
+    >
+      {/* ฝั่งซ้าย: โหมดเขียนแก้ไขด้วยปากกา iPad & ลายเซ็น ผอ. */}
       <div className="lg:col-span-5 space-y-3 bg-slate-50/90 p-4 rounded-2xl border border-slate-200">
         {/* สลับโหมดการทำงานบนกระดาษ */}
         <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2.5">
           <div className="text-xs font-bold text-slate-700">
             เลือกโหมดใช้งานบนหน้ากระดาษ PDF:
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-1.5">
             <button
               type="button"
               onClick={() => setToolMode("move-sig")}
-              className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
+              className={`py-2.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
                 toolMode === "move-sig"
                   ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
                   : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
               }`}
             >
-              <Move className="w-3.5 h-3.5" />
-              <span>ย้ายตำแหน่งลายเซ็น</span>
+              <Move className="w-3.5 h-3.5 shrink-0" />
+              <span>ย้ายลายเซ็น</span>
             </button>
             <button
               type="button"
               onClick={() => setToolMode("pen")}
-              className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
+              className={`py-2.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
                 toolMode === "pen"
                   ? "bg-rose-600 text-white border-rose-600 shadow-xs"
                   : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
               }`}
             >
-              <PenLine className="w-3.5 h-3.5" />
-              <span>เขียนแก้ไขบนกระดาษ</span>
+              <PenLine className="w-3.5 h-3.5 shrink-0" />
+              <span>ปากกาเขียนแก้</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setToolMode("pan")}
+              className={`py-2.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
+                toolMode === "pan"
+                  ? "bg-amber-600 text-white border-amber-600 shadow-xs"
+                  : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+              }`}
+            >
+              <Hand className="w-3.5 h-3.5 shrink-0" />
+              <span>เลื่อนกระดาษ</span>
             </button>
           </div>
 
-          {/* เครื่องมือปากกาเขียนแก้ไขบนกระดาษ */}
+          {/* เครื่องมือปากกาเขียนแก้ไขตามน้ำหนักกด */}
           {toolMode === "pen" && (
             <div className="pt-2 border-t border-slate-100 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[11px] font-bold text-slate-600">สีปากกาเขียนแก้ไข:</span>
+                <span className="text-[11px] font-bold text-slate-600">สีหมึกปากกา:</span>
                 <div className="flex items-center gap-1.5">
                   {[
                     { color: "#dc2626", label: "แดง (แก้ไข)" },
@@ -777,15 +976,15 @@ export function DirectorStampCanvas({
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1">
                   <label className="block text-[11px] text-slate-500 mb-0.5">
-                    ความหนาเส้นปากกา
+                    ขนาดหัวปากกา (แปรผันตามน้ำหนักกดปากกา iPad อัตโนมัติ)
                   </label>
                   <input
                     type="range"
-                    min={2}
-                    max={9}
-                    step={0.5}
-                    value={penWidth}
-                    onChange={(e) => setPenWidth(Number(e.target.value))}
+                    min={0.35}
+                    max={1.4}
+                    step={0.05}
+                    value={penBaseWidthMm}
+                    onChange={(e) => setPenBaseWidthMm(Number(e.target.value))}
                     className="w-full accent-rose-600"
                   />
                 </div>
@@ -812,14 +1011,23 @@ export function DirectorStampCanvas({
                   </button>
                 </div>
               </div>
-              <p className="text-[11px] text-rose-700 bg-rose-50/80 p-2 rounded-lg">
-                ✏️ ใช้ปากกา iPad, นิ้ว หรือเมาส์ ขีดวงกลมหรือเขียนข้อความแก้ไขลงบนหน้ากระดาษด้านขวาได้โดยตรงทุกหน้าครับ
-              </p>
+
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-indigo-900 bg-indigo-50/70 p-2 rounded-lg border border-indigo-200/70 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ipadPencilOnly}
+                  onChange={(e) => setIpadPencilOnly(e.target.checked)}
+                  className="accent-indigo-600 w-3.5 h-3.5"
+                />
+                <span>
+                  โหมดปากกา iPad (ใช้ปากกาเขียนตามแรงกด / ใช้นิ้วแตะเลื่อนกระดาษที่ซูม)
+                </span>
+              </label>
             </div>
           )}
         </div>
 
-        {/* ลายเซ็น ผอ. (รูปแบบเดิมที่ติ๊กถูกไว้) */}
+        {/* ลายเซ็น ผอ. */}
         <div className="p-3.5 rounded-xl bg-white border border-slate-200/80 space-y-2.5">
           <div className="flex items-center justify-between">
             <label className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
@@ -874,7 +1082,11 @@ export function DirectorStampCanvas({
             </label>
             <button
               type="button"
-              onClick={() => setShowDrawModal(true)}
+              onClick={() => {
+                sigPadStrokesRef.current = [];
+                activeSigPadStrokeRef.current = null;
+                setShowDrawModal(true);
+              }}
               className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-800 border border-pink-200 text-xs font-bold"
             >
               <PenTool className="w-3.5 h-3.5" />
@@ -974,16 +1186,18 @@ export function DirectorStampCanvas({
         </div>
       </div>
 
-      {/* ฝั่งขวา: ตัวอย่างหน้ากระดาษ PDF จริง */}
-      <div className="lg:col-span-7 flex flex-col items-center space-y-2 bg-slate-200/70 p-3 sm:p-4 rounded-2xl border border-slate-300">
-        {/* แถบเลือกหน้า (เอาคำว่า บันทึกข้อความ ออกตามที่แจ้ง) */}
+      {/* ฝั่งขวา: ตัวอย่างหน้ากระดาษ PDF จริง พร้อมระบบซูม +/- และขยายเต็มจอ */}
+      <div className="lg:col-span-7 flex flex-col items-center space-y-2 bg-slate-200/80 p-3 sm:p-4 rounded-2xl border border-slate-300">
+        {/* แถบเลือกหน้า + แถบซูมกระดาษ (+/-) */}
         <div className="w-full flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-2 rounded-xl shadow-xs">
-          <div className="flex items-center gap-1.5">
+          {/* เลือกหน้า */}
+          <div className="flex items-center gap-1">
             <button
               type="button"
               disabled={pageNumber <= 1 || loadingPdf}
               onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
-              className="p-1 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+              title="หน้าก่อนหน้า"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -994,17 +1208,71 @@ export function DirectorStampCanvas({
               type="button"
               disabled={pageNumber >= totalPages || loadingPdf}
               onClick={() => setPageNumber((p) => Math.min(totalPages, p + 1))}
-              className="p-1 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+              title="หน้าถัดไป"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
-          <span className="text-[11px] font-semibold text-indigo-700">
-            {toolMode === "pen"
-              ? "✏️ โหมดปากกา: เขียนข้อความแก้ไขลงบนกระดาษได้เลย"
-              : "✋ โหมดย้ายลายเซ็น: แตะลากลายเซ็นไปวางจุดที่ต้องการ"}
-          </span>
+          {/* ปุ่มซูม - / + และขนาดด่วน */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={zoomPercent <= 100}
+              onClick={() => setZoomPercent((z) => Math.max(100, z - 25))}
+              className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 disabled:opacity-40"
+              title="ซูมออก (-)"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+            {[100, 150, 200, 250].map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => setZoomPercent(preset)}
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                  zoomPercent === preset
+                    ? "bg-indigo-600 text-white border-indigo-600"
+                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {preset}%
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={zoomPercent >= 325}
+              onClick={() => setZoomPercent((z) => Math.min(325, z + 25))}
+              className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 disabled:opacity-40"
+              title="ซูมเข้า (+)"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsFullscreenWorkspace((v) => !v)}
+              className={`ml-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border inline-flex items-center gap-1 ${
+                isFullscreenWorkspace
+                  ? "bg-amber-600 text-white border-amber-600"
+                  : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+              }`}
+              title="ขยายพื้นที่เขียนให้ใหญ่เต็มจอ"
+            >
+              {isFullscreenWorkspace ? (
+                <>
+                  <Minimize2 className="w-3.5 h-3.5" />
+                  <span>ย่อกลับ</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>ขยายจอ</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {loadingPdf && (
@@ -1020,29 +1288,43 @@ export function DirectorStampCanvas({
           </div>
         )}
 
-        <div className="w-full flex justify-center overflow-auto max-h-[70vh]">
-          <canvas
-            ref={previewCanvasRef}
-            width={CANVAS_W}
-            height={canvasHeight}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            className={`w-full max-w-[540px] h-auto bg-white shadow-lg rounded-lg border border-slate-300 touch-none select-none ${
-              toolMode === "pen"
-                ? "cursor-crosshair"
-                : "cursor-grab active:cursor-grabbing"
-            }`}
-          />
+        <div
+          ref={scrollContainerRef}
+          className={`w-full overflow-auto rounded-xl border border-slate-300 bg-slate-300/60 p-2 ${
+            isFullscreenWorkspace ? "max-h-[82vh]" : "max-h-[70vh]"
+          }`}
+        >
+          <div className="min-w-full flex justify-center">
+            <canvas
+              ref={previewCanvasRef}
+              width={CANVAS_W}
+              height={canvasHeight}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+              style={{
+                width: `${zoomedWidthPx}px`,
+                maxWidth: zoomPercent === 100 ? "100%" : "none",
+              }}
+              className={`h-auto bg-white shadow-lg rounded-lg border border-slate-300 touch-none select-none ${
+                toolMode === "pen"
+                  ? "cursor-crosshair"
+                  : "cursor-grab active:cursor-grabbing"
+              }`}
+            />
+          </div>
         </div>
       </div>
 
-      {/* Modal สำหรับวาดลายเซ็น ผอ. */}
+      {/* Modal สำหรับวาดลายเซ็น ผอ. (รองรับน้ำหนักกดปากกา iPad เช่นกัน) */}
       {showDrawModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
           <div className="bg-white rounded-2xl p-5 max-w-md w-full shadow-2xl space-y-3 border border-slate-200">
             <div className="flex items-center justify-between">
-              <h5 className="text-sm font-bold text-slate-800">วาดลายเซ็น ผอ. (หมึกสีน้ำเงิน)</h5>
+              <h5 className="text-sm font-bold text-slate-800">
+                วาดลายเซ็น ผอ. (รองรับน้ำหนักกดปากกา iPad)
+              </h5>
               <button
                 type="button"
                 onClick={clearDrawnPad}
@@ -1053,12 +1335,13 @@ export function DirectorStampCanvas({
             </div>
             <canvas
               ref={drawPadRef}
-              width={420}
-              height={170}
+              width={560}
+              height={220}
               onPointerDown={startDrawSig}
               onPointerMove={moveDrawSig}
               onPointerUp={endDrawSig}
-              className="w-full h-[170px] rounded-xl border-2 border-dashed border-indigo-200 bg-slate-50/50 cursor-crosshair touch-none"
+              onPointerCancel={endDrawSig}
+              className="w-full h-[180px] rounded-xl border-2 border-dashed border-indigo-200 bg-slate-50/50 cursor-crosshair touch-none"
             />
             <div className="flex justify-end gap-2 pt-1">
               <button
