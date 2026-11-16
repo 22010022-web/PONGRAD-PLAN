@@ -1,10 +1,48 @@
 import { NextResponse } from "next/server";
 import { sendLineFlexNotification } from "@/lib/line-notify";
 
+export async function GET() {
+  return NextResponse.json({ status: "ok", message: "LINE Webhook & Notify endpoint is ready" });
+}
+
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
+
+    // รองรับ LINE Webhook (เมื่อกด Verify ใน LINE Developers หรือพิมพ์ "ขอไอดี" ในกลุ่มเหมือนเว็บเก่า)
+    if (Array.isArray(body?.events)) {
+      const event = body.events[0];
+      if (
+        event &&
+        event.type === "message" &&
+        event.message?.type === "text" &&
+        String(event.message.text || "").trim() === "ขอไอดี" &&
+        event.replyToken
+      ) {
+        const source = event.source || {};
+        const sourceId = source.groupId || source.roomId || source.userId || "ไม่พบ ID";
+        const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+        if (token) {
+          await fetch("https://api.line.me/v2/bot/message/reply", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              replyToken: event.replyToken,
+              messages: [{ type: "text", text: `ID ของกลุ่มนี้คือ:\n${sourceId}` }],
+            }),
+          }).catch(() => {});
+        }
+      }
+      return NextResponse.json({ status: "ok" });
+    }
+
     const { eventType, planData, reviewData } = body;
+    if (!eventType || !planData) {
+      return NextResponse.json({ status: "ignored" });
+    }
 
     let title = "";
     let subtitle = "";
