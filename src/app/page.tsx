@@ -160,7 +160,7 @@ export default function DashboardPage() {
                 {schoolSettings.system_title}
               </h1>
               <p className="text-sm text-slate-600 mt-1">
-                ระบบสารสนเทศติดตามความก้าวหน้าและการนิเทศแผนการจัดการเรียนรู้ที่มีประสิทธิภาพและเป็นมาตรฐาน
+                ระบบบริหารจัดการแผนการจัดการเรียนรู้และบันทึกหลังสอน
               </p>
             </div>
           </div>
