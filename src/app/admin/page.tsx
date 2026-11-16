@@ -72,10 +72,51 @@ async function resizeImageToDataUrl(file: File, maxSize = 256): Promise<string> 
   });
 }
 
+type AdminTab = "school" | "teachers" | "plans";
+
 export default function AdminPage() {
   const { user, isAdmin, schoolSettings, refreshSchoolSettings } = useAuth();
-  const [activeTab, setActiveTab] = useState<"school" | "teachers" | "plans">("school");
+  const [activeTab, setActiveTab] = useState<AdminTab>("school");
   const [alert, setAlert] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    const syncTabFromUrl = () => {
+      if (typeof window === "undefined") return;
+      const tabParam = new URLSearchParams(window.location.search).get("tab");
+      if (tabParam === "plans" || tabParam === "teachers" || tabParam === "school") {
+        setActiveTab(tabParam);
+        setAlert(null);
+      }
+    };
+
+    const handleTabChange = (event: Event) => {
+      const detail = (event as CustomEvent<AdminTab>).detail;
+      if (detail === "school" || detail === "teachers" || detail === "plans") {
+        setActiveTab(detail);
+        setAlert(null);
+      }
+    };
+
+    syncTabFromUrl();
+    window.addEventListener("popstate", syncTabFromUrl);
+    window.addEventListener("admin-tab-change", handleTabChange);
+    return () => {
+      window.removeEventListener("popstate", syncTabFromUrl);
+      window.removeEventListener("admin-tab-change", handleTabChange);
+    };
+  }, []);
+
+  const handleTabChange = (tab: AdminTab) => {
+    setActiveTab(tab);
+    setAlert(null);
+    if (typeof window !== "undefined") {
+      const nextUrl = tab === "school" ? "/admin" : `/admin?tab=${tab}`;
+      if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+        window.history.replaceState(null, "", nextUrl);
+      }
+      window.dispatchEvent(new CustomEvent<AdminTab>("admin-tab-change", { detail: tab }));
+    }
+  };
 
   // 1. School settings states
   const [schoolName, setSchoolName] = useState(schoolSettings.school_name);
@@ -452,10 +493,7 @@ export default function AdminPage() {
       <div className="grid grid-cols-3 gap-2 p-1.5 glass-panel rounded-2xl border border-white/80 max-w-2xl">
         <button
           type="button"
-          onClick={() => {
-            setActiveTab("school");
-            setAlert(null);
-          }}
+          onClick={() => handleTabChange("school")}
           className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
             activeTab === "school"
               ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow"
@@ -468,10 +506,7 @@ export default function AdminPage() {
 
         <button
           type="button"
-          onClick={() => {
-            setActiveTab("teachers");
-            setAlert(null);
-          }}
+          onClick={() => handleTabChange("teachers")}
           className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
             activeTab === "teachers"
               ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow"
@@ -484,10 +519,7 @@ export default function AdminPage() {
 
         <button
           type="button"
-          onClick={() => {
-            setActiveTab("plans");
-            setAlert(null);
-          }}
+          onClick={() => handleTabChange("plans")}
           className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
             activeTab === "plans"
               ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow"

@@ -1,14 +1,53 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
-import { BookOpen, LayoutDashboard, PlusCircle, FileCheck, LogIn, LogOut, Settings, Wrench } from "lucide-react";
+import { BookOpen, LayoutDashboard, PlusCircle, FileCheck, FileText, LogIn, LogOut, Settings, Wrench } from "lucide-react";
+
+type AdminNavTab = "school" | "teachers" | "plans";
+
+function readAdminTabFromLocation(): AdminNavTab {
+  if (typeof window === "undefined") return "school";
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  if (tab === "plans" || tab === "teachers") return tab;
+  return "school";
+}
 
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, profile, teacher, isAdmin, schoolSettings, signOut } = useAuth();
+  const [adminTab, setAdminTab] = useState<AdminNavTab>("school");
+
+  useEffect(() => {
+    setAdminTab(readAdminTabFromLocation());
+
+    const handlePopState = () => {
+      setAdminTab(readAdminTabFromLocation());
+    };
+    const handleTabChange = (event: Event) => {
+      const detail = (event as CustomEvent<AdminNavTab>).detail;
+      if (detail === "school" || detail === "teachers" || detail === "plans") {
+        setAdminTab(detail);
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("admin-tab-change", handleTabChange);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("admin-tab-change", handleTabChange);
+    };
+  }, [pathname]);
+
+  const notifyAdminTab = (tab: AdminNavTab) => {
+    setAdminTab(tab);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent<AdminNavTab>("admin-tab-change", { detail: tab }));
+    }
+  };
 
   return (
     <header className="sticky top-0 z-50 glass-panel border-b border-white/60">
@@ -65,7 +104,7 @@ export default function Navbar() {
               <span className="hidden sm:inline">PDF Tools</span>
             </Link>
 
-            {user && (
+            {user && !isAdmin && (
               <>
                 <Link
                   href="/submit"
@@ -90,34 +129,48 @@ export default function Navbar() {
                   <BookOpen className="w-4 h-4" />
                   <span className="hidden sm:inline">แผนของฉัน</span>
                 </Link>
+              </>
+            )}
 
-                {isAdmin && (
-                  <>
-                    <Link
-                      href="/review"
-                      className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                        pathname === "/review"
-                          ? "bg-gradient-to-r from-amber-500 to-pink-600 text-white shadow-sm"
-                          : "text-amber-700 bg-amber-50 hover:bg-amber-100"
-                      }`}
-                    >
-                      <FileCheck className="w-4 h-4" />
-                      <span>ตรวจแผน (ผอ.)</span>
-                    </Link>
+            {user && isAdmin && (
+              <>
+                <Link
+                  href="/review"
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                    pathname === "/review"
+                      ? "bg-gradient-to-r from-amber-500 to-pink-600 text-white shadow-sm"
+                      : "text-amber-700 bg-amber-50 hover:bg-amber-100"
+                  }`}
+                >
+                  <FileCheck className="w-4 h-4" />
+                  <span>ตรวจแผน (ผอ.)</span>
+                </Link>
 
-                    <Link
-                      href="/admin"
-                      className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                        pathname === "/admin"
-                          ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-sm"
-                          : "text-purple-700 bg-purple-50 hover:bg-purple-100"
-                      }`}
-                    >
-                      <Settings className="w-4 h-4" />
-                      <span className="hidden md:inline">จัดการระบบ</span>
-                    </Link>
-                  </>
-                )}
+                <Link
+                  href="/admin?tab=plans"
+                  onClick={() => notifyAdminTab("plans")}
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                    pathname === "/admin" && adminTab === "plans"
+                      ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm"
+                      : "text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                  }`}
+                >
+                  <FileText className="w-4 h-4" />
+                  <span>จัดการแผน</span>
+                </Link>
+
+                <Link
+                  href="/admin?tab=school"
+                  onClick={() => notifyAdminTab("school")}
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                    pathname === "/admin" && adminTab !== "plans"
+                      ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-sm"
+                      : "text-purple-700 bg-purple-50 hover:bg-purple-100"
+                  }`}
+                >
+                  <Settings className="w-4 h-4" />
+                  <span className="hidden md:inline">จัดการระบบ</span>
+                </Link>
               </>
             )}
 

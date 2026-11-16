@@ -14,7 +14,7 @@ import {
 } from "@/lib/plan-ordering";
 
 export default function DashboardPage() {
-  const { user, schoolSettings } = useAuth();
+  const { user, isAdmin, schoolSettings } = useAuth();
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -99,13 +99,32 @@ export default function DashboardPage() {
               </p>
             </div>
           </div>
-          {user && (
+          {user && !isAdmin && (
             <div className="flex flex-wrap gap-2">
               <Link
                 href="/submit"
                 className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all"
               >
                 + ส่งแผนการสอนใหม่
+              </Link>
+            </div>
+          )}
+
+          {user && isAdmin && (
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/review"
+                className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-amber-500 to-pink-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all flex items-center gap-1.5"
+              >
+                <FileCheck className="w-4 h-4" />
+                <span>ตรวจแผน (ผอ.)</span>
+              </Link>
+              <Link
+                href="/admin?tab=plans"
+                className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all flex items-center gap-1.5"
+              >
+                <FileText className="w-4 h-4" />
+                <span>จัดการแผน</span>
               </Link>
             </div>
           )}
