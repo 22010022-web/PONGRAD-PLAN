@@ -4,12 +4,15 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { LessonPlan, PlanStatus, Teacher } from "@/types/database";
+import { BannerItem, NewsItem } from "@/types/cms";
+import { AdminBannerManager, AdminNewsManager } from "@/components/admin-cms-manager";
 import {
   Settings,
   ShieldAlert,
   Image as ImageIcon,
   Users,
   FileText,
+  Newspaper,
   Plus,
   Pencil,
   Trash2,
@@ -72,7 +75,7 @@ async function resizeImageToDataUrl(file: File, maxSize = 256): Promise<string> 
   });
 }
 
-type AdminTab = "school" | "teachers" | "plans";
+type AdminTab = "school" | "teachers" | "plans" | "news" | "banners";
 
 export default function AdminPage() {
   const { user, isAdmin, schoolSettings, refreshSchoolSettings } = useAuth();
@@ -83,7 +86,13 @@ export default function AdminPage() {
     const syncTabFromUrl = () => {
       if (typeof window === "undefined") return;
       const tabParam = new URLSearchParams(window.location.search).get("tab");
-      if (tabParam === "plans" || tabParam === "teachers" || tabParam === "school") {
+      if (
+        tabParam === "plans" ||
+        tabParam === "teachers" ||
+        tabParam === "school" ||
+        tabParam === "news" ||
+        tabParam === "banners"
+      ) {
         setActiveTab(tabParam);
         setAlert(null);
       }
@@ -91,7 +100,13 @@ export default function AdminPage() {
 
     const handleTabChange = (event: Event) => {
       const detail = (event as CustomEvent<AdminTab>).detail;
-      if (detail === "school" || detail === "teachers" || detail === "plans") {
+      if (
+        detail === "school" ||
+        detail === "teachers" ||
+        detail === "plans" ||
+        detail === "news" ||
+        detail === "banners"
+      ) {
         setActiveTab(detail);
         setAlert(null);
       }
@@ -162,6 +177,32 @@ export default function AdminPage() {
   const [planSearch, setPlanSearch] = useState("");
   const [busyPlanId, setBusyPlanId] = useState<string | null>(null);
 
+  // 4. News & Banner CMS states
+  const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
+  const [bannerItems, setBannerItems] = useState<BannerItem[]>([]);
+  const [loadingCms, setLoadingCms] = useState(true);
+
+  const loadCmsData = async () => {
+    setLoadingCms(true);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const res = await fetch("/api/admin/cms", {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data) {
+        if (Array.isArray(data.news)) setNewsItems(data.news);
+        if (Array.isArray(data.banners)) setBannerItems(data.banners);
+      }
+    } finally {
+      setLoadingCms(false);
+    }
+  };
+
   useEffect(() => {
     setSchoolName(schoolSettings.school_name);
     setSystemTitle(schoolSettings.system_title);
@@ -213,6 +254,7 @@ export default function AdminPage() {
     if (isAdmin) {
       loadTeachers();
       loadPlans();
+      loadCmsData();
       handleCheckLineQuota();
     }
   }, [isAdmin]);
@@ -490,45 +532,48 @@ export default function AdminPage() {
       </div>
 
       {/* Tabs */}
-      <div className="grid grid-cols-3 gap-2 p-1.5 glass-panel rounded-2xl border border-white/80 max-w-2xl">
-        <button
-          type="button"
-          onClick={() => handleTabChange("school")}
-          className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
-            activeTab === "school"
-              ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow"
-              : "text-slate-600 hover:bg-white/60"
-          }`}
-        >
-          <ImageIcon className="w-4 h-4" />
-          <span>โลโก้ &amp; โรงเรียน</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleTabChange("teachers")}
-          className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
-            activeTab === "teachers"
-              ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow"
-              : "text-slate-600 hover:bg-white/60"
-          }`}
-        >
-          <Users className="w-4 h-4" />
-          <span>จัดการครู ({teachers.length})</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleTabChange("plans")}
-          className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
-            activeTab === "plans"
-              ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow"
-              : "text-slate-600 hover:bg-white/60"
-          }`}
-        >
-          <FileText className="w-4 h-4" />
-          <span>จัดการแผน ({plans.length})</span>
-        </button>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 p-1.5 glass-panel rounded-2xl border border-white/80 max-w-4xl">
+        {[
+          {
+            id: "school" as AdminTab,
+            label: "โลโก้ & โรงเรียน",
+            icon: <Settings className="w-4 h-4" />,
+          },
+          {
+            id: "teachers" as AdminTab,
+            label: `จัดการครู (${teachers.length})`,
+            icon: <Users className="w-4 h-4" />,
+          },
+          {
+            id: "plans" as AdminTab,
+            label: `จัดการแผน (${plans.length})`,
+            icon: <FileText className="w-4 h-4" />,
+          },
+          {
+            id: "news" as AdminTab,
+            label: `ข่าวสาร (${newsItems.length})`,
+            icon: <Newspaper className="w-4 h-4" />,
+          },
+          {
+            id: "banners" as AdminTab,
+            label: `แบนเนอร์ (${bannerItems.length})`,
+            icon: <ImageIcon className="w-4 h-4" />,
+          },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => handleTabChange(tab.id)}
+            className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === tab.id
+                ? "bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow"
+                : "text-slate-600 hover:bg-white/60"
+            }`}
+          >
+            {tab.icon}
+            <span>{tab.label}</span>
+          </button>
+        ))}
       </div>
 
       {alert && (
@@ -1007,6 +1052,26 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Tab 4: จัดการข่าวประชาสัมพันธ์ */}
+      {activeTab === "news" && (
+        <AdminNewsManager
+          news={newsItems}
+          loading={loadingCms}
+          onUpdate={setNewsItems}
+          onNotify={setAlert}
+        />
+      )}
+
+      {/* Tab 5: จัดการแบนเนอร์หน้าแรก */}
+      {activeTab === "banners" && (
+        <AdminBannerManager
+          banners={bannerItems}
+          loading={loadingCms}
+          onUpdate={setBannerItems}
+          onNotify={setAlert}
+        />
       )}
 
       {/* Modal Add/Edit Teacher */}

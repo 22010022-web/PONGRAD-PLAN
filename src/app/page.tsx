@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useAuth } from "@/context/auth-context";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
 import { LessonPlan, Teacher } from "@/types/database";
+import { BannerItem, NewsItem } from "@/types/cms";
+import { HomeBannerCarousel, HomeNewsSection } from "@/components/home-showcase";
 import { FileText, CheckCircle2, Clock, FileCheck, LogIn, Loader2, BookOpen } from "lucide-react";
 import {
   buildSubmissionOrderMap,
@@ -17,12 +19,31 @@ export default function DashboardPage() {
   const { user, profile, teacher, isLoading: authLoading, isAdmin, schoolSettings } = useAuth();
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [banners, setBanners] = useState<BannerItem[]>([]);
+  const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filterTeacher, setFilterTeacher] = useState("");
   const [filterSubject, setFilterSubject] = useState("");
   const [filterScope, setFilterScope] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [sortOrder, setSortOrder] = useState<PlanSortOrder>("newest");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/cms", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (Array.isArray(data?.banners)) setBanners(data.banners);
+        if (Array.isArray(data?.news)) setNewsList(data.news);
+      })
+      .catch(() => {
+        // ignore cms fetch errors cleanly
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const linkedTeacherId = profile?.teacher_id || teacher?.id || null;
   const hasLinkedTeacherRow = Boolean(linkedTeacherId && !linkedTeacherId.startsWith("00000000-"));
@@ -215,34 +236,41 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Hero Banner Carousel */}
+      <HomeBannerCarousel banners={banners} />
+
       {authLoading || isLoading ? (
         <div className="glass-card rounded-3xl p-12 text-center border border-white/80">
           <Loader2 className="w-8 h-8 animate-spin text-pink-600 mx-auto mb-3" />
           <p className="text-sm font-semibold text-slate-600">กำลังโหลดข้อมูลแดชบอร์ด...</p>
         </div>
       ) : !user ? (
-        <div className="glass-card rounded-3xl p-8 sm:p-12 text-center border border-white/80 space-y-4">
-          <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-pink-100 to-purple-100 text-pink-600 flex items-center justify-center shadow-sm">
-            <LogIn className="w-8 h-8" />
+        <>
+          <div className="glass-card rounded-3xl p-8 sm:p-12 text-center border border-white/80 space-y-4">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-pink-100 to-purple-100 text-pink-600 flex items-center justify-center shadow-sm">
+              <LogIn className="w-8 h-8" />
+            </div>
+            <div className="max-w-lg mx-auto space-y-1.5">
+              <h2 className="font-display font-bold text-lg sm:text-xl text-slate-800">
+                กรุณาเข้าสู่ระบบเพื่อดูข้อมูลแดชบอร์ด
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-600">
+                ระบบจะแสดงสรุปภาระงาน สถานะการตรวจ และประวัติการส่งแผนการจัดการเรียนรู้เฉพาะของคุณครูแต่ละท่านอย่างเป็นส่วนตัว (สำหรับผู้บริหารจะแสดงภาพรวมทั้งโรงเรียน)
+              </p>
+            </div>
+            <div className="pt-2 flex flex-wrap justify-center gap-3">
+              <Link
+                href="/login"
+                className="px-6 py-3 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all inline-flex items-center gap-2"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>เข้าสู่ระบบ / ลงทะเบียนครู</span>
+              </Link>
+            </div>
           </div>
-          <div className="max-w-lg mx-auto space-y-1.5">
-            <h2 className="font-display font-bold text-lg sm:text-xl text-slate-800">
-              กรุณาเข้าสู่ระบบเพื่อดูข้อมูลแดชบอร์ด
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-600">
-              ระบบจะแสดงสรุปภาระงาน สถานะการตรวจ และประวัติการส่งแผนการจัดการเรียนรู้เฉพาะของคุณครูแต่ละท่านอย่างเป็นส่วนตัว (สำหรับผู้บริหารจะแสดงภาพรวมทั้งโรงเรียน)
-            </p>
-          </div>
-          <div className="pt-2 flex flex-wrap justify-center gap-3">
-            <Link
-              href="/login"
-              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all inline-flex items-center gap-2"
-            >
-              <LogIn className="w-4 h-4" />
-              <span>เข้าสู่ระบบ / ลงทะเบียนครู</span>
-            </Link>
-          </div>
-        </div>
+
+          <HomeNewsSection news={newsList} />
+        </>
       ) : (
         <>
           {/* KPI Cards */}
@@ -309,6 +337,9 @@ export default function DashboardPage() {
           </p>
         </div>
       </div>
+
+      {/* ข่าวสารและประกาศประชาสัมพันธ์ */}
+      <HomeNewsSection news={newsList} />
 
       {/* Teacher Workload Summary Table */}
       <div className="glass-card rounded-3xl p-6 border border-white/80">
