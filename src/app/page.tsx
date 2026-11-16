@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/context/auth-context";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
 import { LessonPlan, Teacher } from "@/types/database";
-import { FileText, CheckCircle2, Clock, AlertCircle, FileCheck, Search, Filter } from "lucide-react";
+import { FileText, CheckCircle2, Clock, FileCheck, LogIn, Loader2, BookOpen } from "lucide-react";
 import {
   buildSubmissionOrderMap,
   formatThaiDateTime,
@@ -14,7 +14,7 @@ import {
 } from "@/lib/plan-ordering";
 
 export default function DashboardPage() {
-  const { user, isAdmin, schoolSettings } = useAuth();
+  const { user, profile, teacher, isLoading: authLoading, isAdmin, schoolSettings } = useAuth();
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -24,30 +24,76 @@ export default function DashboardPage() {
   const [filterStatus, setFilterStatus] = useState("");
   const [sortOrder, setSortOrder] = useState<PlanSortOrder>("newest");
 
+  const linkedTeacherId = profile?.teacher_id || teacher?.id || null;
+  const hasLinkedTeacherRow = Boolean(linkedTeacherId && !linkedTeacherId.startsWith("00000000-"));
+
   useEffect(() => {
+    let cancelled = false;
+
     async function loadData() {
+      if (authLoading) {
+        setIsLoading(true);
+        return;
+      }
+
       if (!isSupabaseConfigured()) {
         setIsLoading(false);
         return;
       }
 
+      // ยังไม่เข้าสู่ระบบ: ไม่ดึงข้อมูลแผนรายบุคคลขึ้นมาแสดงเพื่อความเป็นส่วนตัว
+      if (!user) {
+        setPlans([]);
+        setTeachers([]);
+        setFilterTeacher("");
+        setIsLoading(false);
+        return;
+      }
+
+      setIsLoading(true);
       try {
+        let plansQuery = supabase
+          .from("lesson_plans")
+          .select("*, reviews:plan_reviews(*)")
+          .order("created_at", { ascending: false });
+
+        let teachersQuery = supabase
+          .from("teachers")
+          .select("*")
+          .eq("is_active", true)
+          .order("display_order", { ascending: true });
+
+        if (!isAdmin) {
+          if (hasLinkedTeacherRow && linkedTeacherId) {
+            plansQuery = plansQuery.or(`created_by.eq.${user.id},teacher_id.eq.${linkedTeacherId}`);
+            teachersQuery = teachersQuery.eq("id", linkedTeacherId);
+          } else {
+            plansQuery = plansQuery.eq("created_by", user.id);
+          }
+        }
+
         const [plansRes, teachersRes] = await Promise.all([
-          supabase.from("lesson_plans").select("*, reviews:plan_reviews(*)").order("created_at", { ascending: false }),
-          supabase.from("teachers").select("*").eq("is_active", true).order("display_order", { ascending: true })
+          plansQuery,
+          !isAdmin && !hasLinkedTeacherRow
+            ? Promise.resolve({ data: [] as Teacher[] })
+            : teachersQuery,
         ]);
 
+        if (cancelled) return;
         if (plansRes.data) setPlans(plansRes.data as LessonPlan[]);
         if (teachersRes.data) setTeachers(teachersRes.data as Teacher[]);
       } catch (err) {
         console.error("Dashboard load error:", err);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     }
 
     loadData();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user, isAdmin, linkedTeacherId, hasLinkedTeacherRow]);
 
   const totalPlans = plans.length;
   const approvedPlans = plans.filter(p => p.status === "เสร็จสมบูรณ์" || p.status === "แผนผ่าน (รอส่งบันทึก)" || p.status === "รอตรวจบันทึก").length;
@@ -61,9 +107,28 @@ export default function DashboardPage() {
   const orderMap = buildSubmissionOrderMap(plans);
   const subjectOptions = Array.from(new Set(plans.map((p) => p.subject).filter(Boolean)));
 
+  const personalDisplayName =
+    teacher?.name || profile?.full_name || user?.email || "ครูผู้สอน";
+
+  const summaryTeachers: Teacher[] = isAdmin
+    ? teachers
+    : teachers.length > 0
+      ? teachers
+      : [
+          {
+            id: user?.id || "self",
+            name: personalDisplayName,
+            short_name: personalDisplayName,
+            category: "primary",
+            grade_level: "ครูผู้สอน",
+            is_active: true,
+            display_order: 1,
+          },
+        ];
+
   const filteredPlans = sortPlansByDate(
     plans.filter((p) => {
-      if (filterTeacher && p.teacher_name !== filterTeacher) return false;
+      if (isAdmin && filterTeacher && p.teacher_name !== filterTeacher) return false;
       if (filterSubject && p.subject !== filterSubject) return false;
       if (filterScope && p.scope_type !== filterScope) return false;
       if (filterStatus && p.status !== filterStatus) return false;
@@ -99,6 +164,18 @@ export default function DashboardPage() {
               </p>
             </div>
           </div>
+          {!authLoading && !user && (
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/login"
+                className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all flex items-center gap-1.5"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>เข้าสู่ระบบ</span>
+              </Link>
+            </div>
+          )}
+
           {user && !isAdmin && (
             <div className="flex flex-wrap gap-2">
               <Link
@@ -106,6 +183,13 @@ export default function DashboardPage() {
                 className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all"
               >
                 + ส่งแผนการสอนใหม่
+              </Link>
+              <Link
+                href="/my-plans"
+                className="px-4 py-2.5 rounded-2xl bg-white/80 hover:bg-white text-pink-700 border border-pink-200 font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center gap-1.5"
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>แผนของฉัน</span>
               </Link>
             </div>
           )}
@@ -131,12 +215,44 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {authLoading || isLoading ? (
+        <div className="glass-card rounded-3xl p-12 text-center border border-white/80">
+          <Loader2 className="w-8 h-8 animate-spin text-pink-600 mx-auto mb-3" />
+          <p className="text-sm font-semibold text-slate-600">กำลังโหลดข้อมูลแดชบอร์ด...</p>
+        </div>
+      ) : !user ? (
+        <div className="glass-card rounded-3xl p-8 sm:p-12 text-center border border-white/80 space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-pink-100 to-purple-100 text-pink-600 flex items-center justify-center shadow-sm">
+            <LogIn className="w-8 h-8" />
+          </div>
+          <div className="max-w-lg mx-auto space-y-1.5">
+            <h2 className="font-display font-bold text-lg sm:text-xl text-slate-800">
+              กรุณาเข้าสู่ระบบเพื่อดูข้อมูลแดชบอร์ด
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600">
+              ระบบจะแสดงสรุปภาระงาน สถานะการตรวจ และประวัติการส่งแผนการจัดการเรียนรู้เฉพาะของคุณครูแต่ละท่านอย่างเป็นส่วนตัว (สำหรับผู้บริหารจะแสดงภาพรวมทั้งโรงเรียน)
+            </p>
+          </div>
+          <div className="pt-2 flex flex-wrap justify-center gap-3">
+            <Link
+              href="/login"
+              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all inline-flex items-center gap-2"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>เข้าสู่ระบบ / ลงทะเบียนครู</span>
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="glass-card rounded-2xl p-5 border-l-4 border-l-pink-600">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-xs font-semibold text-slate-500">แผนที่ส่งทั้งหมด</p>
+              <p className="text-xs font-semibold text-slate-500">
+                {isAdmin ? "แผนที่ส่งทั้งหมด" : "แผนที่ส่งทั้งหมด (ของฉัน)"}
+              </p>
               <h3 className="text-2xl sm:text-3xl font-extrabold text-pink-700 mt-1">{totalPlans}</h3>
             </div>
             <div className="p-2.5 rounded-xl bg-pink-50 text-pink-600">
@@ -199,7 +315,9 @@ export default function DashboardPage() {
         <div className="flex justify-between items-center mb-4">
           <h2 className="font-display font-bold text-base sm:text-lg text-slate-800 flex items-center gap-2">
             <span className="w-2.5 h-6 rounded-full bg-gradient-to-b from-pink-600 to-amber-500"></span>
-            ตารางสรุปภาระงานและความคืบหน้ารายบุคคล (คณะครู {teachers.length} ท่าน)
+            {isAdmin
+              ? `ตารางสรุปภาระงานและความคืบหน้ารายบุคคล (คณะครู ${summaryTeachers.length} ท่าน)`
+              : `สรุปภาระงานและความคืบหน้าของฉัน (${personalDisplayName})`}
           </h2>
         </div>
 
@@ -218,8 +336,10 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {teachers.map((t) => {
-                const tPlans = plans.filter(p => p.teacher_name === t.name);
+              {summaryTeachers.map((t) => {
+                const tPlans = isAdmin
+                  ? plans.filter((p) => p.teacher_id === t.id || p.teacher_name === t.name)
+                  : plans;
                 const tTerm = tPlans.filter(p => p.scope_type === 'term').length;
                 const tUnit = tPlans.filter(p => p.scope_type === 'unit').length;
                 const tWeek = tPlans.filter(p => p.scope_type === 'week').length;
@@ -279,18 +399,20 @@ export default function DashboardPage() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
           <h2 className="font-display font-bold text-base sm:text-lg text-slate-800 flex items-center gap-2">
             <span className="w-2.5 h-6 rounded-full bg-gradient-to-b from-purple-600 to-pink-600"></span>
-            ประวัติการส่งแผนการจัดการเรียนรู้ล่าสุด
+            {isAdmin ? "ประวัติการส่งแผนการจัดการเรียนรู้ล่าสุด" : "ประวัติการส่งแผนการจัดการเรียนรู้ของฉัน"}
           </h2>
 
           <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-            <select
-              value={filterTeacher}
-              onChange={(e) => setFilterTeacher(e.target.value)}
-              className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
-            >
-              <option value="">ครูทุกท่าน</option>
-              {teachers.map(t => <option key={t.id} value={t.name}>{t.short_name}</option>)}
-            </select>
+            {isAdmin && (
+              <select
+                value={filterTeacher}
+                onChange={(e) => setFilterTeacher(e.target.value)}
+                className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
+              >
+                <option value="">ครูทุกท่าน</option>
+                {teachers.map(t => <option key={t.id} value={t.name}>{t.short_name}</option>)}
+              </select>
+            )}
 
             <select
               value={filterSubject}
@@ -431,6 +553,8 @@ export default function DashboardPage() {
           </table>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }
