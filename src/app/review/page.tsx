@@ -131,13 +131,29 @@ export default function ReviewPage() {
       const { error: reviewErr } = await supabase.from("plan_reviews").insert([reviewRecord]);
       if (reviewErr) throw reviewErr;
 
-      // 2. อัปเดตสถานะของแผน
+      // 2. อัปเดตสถานะของแผน (และอัปเดตลิงก์ไฟล์หลักให้ชี้ไปยังไฟล์ที่ลงนามแล้วเสมอ)
+      const planUpdatePayload: Record<string, any> = {
+        status: statusAssigned,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (finalReviewedUrl) {
+        if (reviewMode === "post" && !selectedPlan.use_existing_file && selectedPlan.post_file_url) {
+          planUpdatePayload.post_file_url = finalReviewedUrl;
+          if (finalReviewedFileId) planUpdatePayload.post_file_id = finalReviewedFileId;
+        } else {
+          planUpdatePayload.plan_file_url = finalReviewedUrl;
+          if (finalReviewedFileId) planUpdatePayload.plan_file_id = finalReviewedFileId;
+          if (selectedPlan.use_existing_file && selectedPlan.post_file_url) {
+            planUpdatePayload.post_file_url = finalReviewedUrl;
+            if (finalReviewedFileId) planUpdatePayload.post_file_id = finalReviewedFileId;
+          }
+        }
+      }
+
       const { error: planErr } = await supabase
         .from("lesson_plans")
-        .update({
-          status: statusAssigned,
-          updated_at: new Date().toISOString(),
-        })
+        .update(planUpdatePayload)
         .eq("id", selectedPlan.id);
 
       if (planErr) throw planErr;

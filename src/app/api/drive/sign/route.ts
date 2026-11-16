@@ -148,41 +148,69 @@ export async function POST(req: Request) {
 
     const signedPdfBytes = Buffer.from(await pdfDoc.save());
 
-    // 4. Upload signed PDF into teacher's subfolder in Google Drive
-    const folderName = body.teacherName?.trim() || "เอกสารลงนามแล้ว";
-    const targetFolderId = await ensureSubfolder(folderName);
-    const cleanSourceName = sourceName.replace(/^\[ผอ\.ลงนาม\]_/, "");
-    const prefix = body.taskCode ? `[ผอ.ลงนาม]_${body.taskCode}_` : "[ผอ.ลงนาม]_";
-    const signedFileName = cleanSourceName.startsWith(prefix)
-      ? cleanSourceName
-      : `${prefix}${cleanSourceName}`;
+    // 4. เขียนทับไฟล์เดิมใน Google Drive โดยตรง (ไม่แยกเป็น 2 ไฟล์ เพื่อไม่ให้สับสนและให้ลิงก์เดิมแสดงไฟล์ที่ลงนามแล้วทันที)
+    let resultFileId = sourceFileId;
+    let resultFileName = sourceName;
 
-    const uploadRes = await drive.files.create({
-      requestBody: {
-        name: signedFileName,
-        parents: [targetFolderId],
-        mimeType: "application/pdf",
-      },
-      media: {
-        mimeType: "application/pdf",
-        body: Readable.from(signedPdfBytes),
-      },
-      fields: "id, name",
-      supportsAllDrives: true,
-    });
+    try {
+      const updateRes = await drive.files.update({
+        fileId: sourceFileId,
+        requestBody: {
+          name: sourceName,
+          mimeType: "application/pdf",
+        },
+        media: {
+          mimeType: "application/pdf",
+          body: Readable.from(signedPdfBytes),
+        },
+        fields: "id, name",
+        supportsAllDrives: true,
+      });
+      if (updateRes.data.id) {
+        resultFileId = updateRes.data.id;
+        resultFileName = updateRes.data.name || sourceName;
+      }
+    } catch (updateErr) {
+      console.warn("In-place file update failed, replacing file in folder:", updateErr);
+      const folderName = body.teacherName?.trim() || "เอกสารลงนามแล้ว";
+      const targetFolderId = metaRes.data.parents?.[0] || (await ensureSubfolder(folderName));
+      const uploadRes = await drive.files.create({
+        requestBody: {
+          name: sourceName,
+          parents: [targetFolderId],
+          mimeType: "application/pdf",
+        },
+        media: {
+          mimeType: "application/pdf",
+          body: Readable.from(signedPdfBytes),
+        },
+        fields: "id, name",
+        supportsAllDrives: true,
+      });
 
-    const newFileId = uploadRes.data.id;
-    if (!newFileId) {
-      throw new Error("อัปโหลดไฟล์ที่ลงนามแล้วไม่สำเร็จ (ไม่ได้รับ File ID)");
+      if (!uploadRes.data.id) {
+        throw new Error("อัปโหลดไฟล์ที่ลงนามแล้วไม่สำเร็จ (ไม่ได้รับ File ID)");
+      }
+      resultFileId = uploadRes.data.id;
+      resultFileName = uploadRes.data.name || sourceName;
+
+      // ย้ายไฟล์เดิมที่ยังไม่ลงนามลงถังขยะเพื่อไม่ให้มี 2 ไฟล์ซ้ำกันในโฟลเดอร์
+      await drive.files
+        .update({
+          fileId: sourceFileId,
+          requestBody: { trashed: true },
+          supportsAllDrives: true,
+        })
+        .catch(() => {});
     }
 
-    await allowAnyoneWithLinkToView(newFileId);
+    await allowAnyoneWithLinkToView(resultFileId);
 
     return NextResponse.json({
-      fileId: newFileId,
-      fileName: uploadRes.data.name || signedFileName,
-      previewUrl: drivePreviewUrl(newFileId),
-      viewUrl: driveViewUrl(newFileId),
+      fileId: resultFileId,
+      fileName: resultFileName,
+      previewUrl: drivePreviewUrl(resultFileId),
+      viewUrl: driveViewUrl(resultFileId),
     });
   } catch (err) {
     const message = explainDriveError(err);
