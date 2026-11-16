@@ -18,7 +18,9 @@ export const maxDuration = 60;
 interface SignRequestBody {
   fileId?: string;
   fileUrl?: string;
-  signatureDataUrl: string;
+  overlayPngDataUrl?: string;
+  pageNumber?: number;
+  signatureDataUrl?: string;
   pageChoice?: "first" | "last";
   position?: "bottom-right" | "bottom-center" | "bottom-left";
   teacherName?: string;
@@ -47,14 +49,15 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!body.signatureDataUrl) {
+    const rawOverlay = body.overlayPngDataUrl || body.signatureDataUrl;
+    if (!rawOverlay) {
       return NextResponse.json(
-        { error: "กรุณาวาดลายเซ็นก่อนบันทึก" },
+        { error: "กรุณาระบุข้อมูลลายเซ็นหรือตราประทับก่อนบันทึก" },
         { status: 400 }
       );
     }
 
-    const pngBytes = parsePngDataUrl(body.signatureDataUrl);
+    const pngBytes = parsePngDataUrl(rawOverlay);
     const drive = getDrive();
 
     // 1. Fetch source file metadata
@@ -82,53 +85,65 @@ export async function POST(req: Request) {
     );
     const pdfBytes = new Uint8Array(fileRes.data as ArrayBuffer);
 
-    // 3. Embed signature image into PDF
+    // 3. Embed overlay or signature image into PDF
     const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const pages = pdfDoc.getPages();
     if (pages.length === 0) {
       return NextResponse.json({ error: "ไฟล์ PDF ไม่มีหน้าเอกสาร" }, { status: 400 });
     }
 
-    const targetPage =
-      body.pageChoice === "first" ? pages[0] : pages[pages.length - 1];
-    const { width: pageWidth } = targetPage.getSize();
-
-    const sigImage = await pdfDoc.embedPng(pngBytes);
-    const sigWidth = Math.min(180, pageWidth * 0.32);
-    const sigHeight = (sigImage.height / sigImage.width) * sigWidth;
-
-    const marginX = 42;
-    const marginY = 48;
-    let x = pageWidth - sigWidth - marginX;
-    if (body.position === "bottom-center") {
-      x = (pageWidth - sigWidth) / 2;
-    } else if (body.position === "bottom-left") {
-      x = marginX;
-    }
-    const y = marginY;
-
-    targetPage.drawImage(sigImage, {
-      x,
-      y,
-      width: sigWidth,
-      height: sigHeight,
-    });
-
-    // Draw ASCII-safe date stamp under signature if provided
-    const asciiDate = (body.signDateText || "")
-      .replace(/[^\x20-\x7E]/g, "")
-      .trim();
-    if (asciiDate) {
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const fontSize = 9;
-      const textWidth = font.widthOfTextAtSize(asciiDate, fontSize);
-      targetPage.drawText(asciiDate, {
-        x: x + Math.max(0, (sigWidth - textWidth) / 2),
-        y: Math.max(18, y - 12),
-        size: fontSize,
-        font,
-        color: rgb(0.2, 0.25, 0.35),
+    if (body.overlayPngDataUrl) {
+      const requestedIdx = Math.max(0, (Number(body.pageNumber) || 1) - 1);
+      const targetPage = pages[Math.min(requestedIdx, pages.length - 1)];
+      const { width: pageWidth, height: pageHeight } = targetPage.getSize();
+      const overlayImage = await pdfDoc.embedPng(pngBytes);
+      targetPage.drawImage(overlayImage, {
+        x: 0,
+        y: 0,
+        width: pageWidth,
+        height: pageHeight,
       });
+    } else {
+      const targetPage =
+        body.pageChoice === "first" ? pages[0] : pages[pages.length - 1];
+      const { width: pageWidth } = targetPage.getSize();
+
+      const sigImage = await pdfDoc.embedPng(pngBytes);
+      const sigWidth = Math.min(180, pageWidth * 0.32);
+      const sigHeight = (sigImage.height / sigImage.width) * sigWidth;
+
+      const marginX = 42;
+      const marginY = 48;
+      let x = pageWidth - sigWidth - marginX;
+      if (body.position === "bottom-center") {
+        x = (pageWidth - sigWidth) / 2;
+      } else if (body.position === "bottom-left") {
+        x = marginX;
+      }
+      const y = marginY;
+
+      targetPage.drawImage(sigImage, {
+        x,
+        y,
+        width: sigWidth,
+        height: sigHeight,
+      });
+
+      const asciiDate = (body.signDateText || "")
+        .replace(/[^\x20-\x7E]/g, "")
+        .trim();
+      if (asciiDate) {
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const fontSize = 9;
+        const textWidth = font.widthOfTextAtSize(asciiDate, fontSize);
+        targetPage.drawText(asciiDate, {
+          x: x + Math.max(0, (sigWidth - textWidth) / 2),
+          y: Math.max(18, y - 12),
+          size: fontSize,
+          font,
+          color: rgb(0.2, 0.25, 0.35),
+        });
+      }
     }
 
     const signedPdfBytes = Buffer.from(await pdfDoc.save());
