@@ -18,6 +18,7 @@ export const maxDuration = 60;
 interface SignRequestBody {
   fileId?: string;
   fileUrl?: string;
+  overlays?: { pageNumber: number; overlayPngDataUrl: string }[];
   overlayPngDataUrl?: string;
   pageNumber?: number;
   signatureDataUrl?: string;
@@ -49,15 +50,15 @@ export async function POST(req: Request) {
       );
     }
 
+    const hasOverlaysList = Array.isArray(body.overlays) && body.overlays.length > 0;
     const rawOverlay = body.overlayPngDataUrl || body.signatureDataUrl;
-    if (!rawOverlay) {
+    if (!hasOverlaysList && !rawOverlay) {
       return NextResponse.json(
-        { error: "กรุณาระบุข้อมูลลายเซ็นหรือตราประทับก่อนบันทึก" },
+        { error: "กรุณาระบุข้อมูลลายเซ็นหรือลายมือเขียนก่อนบันทึก" },
         { status: 400 }
       );
     }
 
-    const pngBytes = parsePngDataUrl(rawOverlay);
     const drive = getDrive();
 
     // 1. Fetch source file metadata
@@ -85,14 +86,30 @@ export async function POST(req: Request) {
     );
     const pdfBytes = new Uint8Array(fileRes.data as ArrayBuffer);
 
-    // 3. Embed overlay or signature image into PDF
+    // 3. Embed overlay(s) or signature image into PDF
     const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
     const pages = pdfDoc.getPages();
     if (pages.length === 0) {
       return NextResponse.json({ error: "ไฟล์ PDF ไม่มีหน้าเอกสาร" }, { status: 400 });
     }
 
-    if (body.overlayPngDataUrl) {
+    if (hasOverlaysList) {
+      for (const item of body.overlays!) {
+        if (!item?.overlayPngDataUrl) continue;
+        const itemBytes = parsePngDataUrl(item.overlayPngDataUrl);
+        const requestedIdx = Math.max(0, (Number(item.pageNumber) || 1) - 1);
+        const targetPage = pages[Math.min(requestedIdx, pages.length - 1)];
+        const { width: pageWidth, height: pageHeight } = targetPage.getSize();
+        const overlayImage = await pdfDoc.embedPng(itemBytes);
+        targetPage.drawImage(overlayImage, {
+          x: 0,
+          y: 0,
+          width: pageWidth,
+          height: pageHeight,
+        });
+      }
+    } else if (body.overlayPngDataUrl) {
+      const pngBytes = parsePngDataUrl(body.overlayPngDataUrl);
       const requestedIdx = Math.max(0, (Number(body.pageNumber) || 1) - 1);
       const targetPage = pages[Math.min(requestedIdx, pages.length - 1)];
       const { width: pageWidth, height: pageHeight } = targetPage.getSize();
@@ -103,7 +120,8 @@ export async function POST(req: Request) {
         width: pageWidth,
         height: pageHeight,
       });
-    } else {
+    } else if (rawOverlay) {
+      const pngBytes = parsePngDataUrl(rawOverlay);
       const targetPage =
         body.pageChoice === "first" ? pages[0] : pages[pages.length - 1];
       const { width: pageWidth } = targetPage.getSize();

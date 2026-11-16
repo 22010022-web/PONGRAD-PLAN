@@ -7,7 +7,6 @@ import { supabase } from "@/lib/supabase/client";
 import { LessonPlan, PlanStatus } from "@/types/database";
 import { FileCheck, ShieldAlert, ExternalLink, X } from "lucide-react";
 import {
-  COMMENT_PRESETS,
   DirectorOverlayExport,
   DirectorStampCanvas,
 } from "@/components/director-stamp-canvas";
@@ -19,8 +18,7 @@ export default function ReviewPage() {
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<LessonPlan | null>(null);
-  const [reviewNote, setReviewNote] = useState(COMMENT_PRESETS[0].text);
-  const [approvalChoice, setApprovalChoice] = useState<"allow" | "disallow">("allow");
+  const [reviewNote, setReviewNote] = useState("");
   const [stampOntoPdf, setStampOntoPdf] = useState(true);
   const [reviewedFileUrl, setReviewedFileUrl] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -66,11 +64,8 @@ export default function ReviewPage() {
     setSelectedPlan(p);
     setReviewedFileUrl("");
     setMsg(null);
-    setApprovalChoice("allow");
     setStampOntoPdf(true);
-    setReviewNote(
-      p.status === "รอตรวจบันทึก" ? COMMENT_PRESETS[2].text : COMMENT_PRESETS[0].text
-    );
+    setReviewNote("");
   };
 
   const handleReviewAction = async (
@@ -87,13 +82,13 @@ export default function ReviewPage() {
       let finalReviewedUrl = reviewedFileUrl.trim() || null;
       let finalReviewedFileId: string | null = null;
 
-      // ประทับกล่องความเห็นและลายเซ็นสีน้ำเงินลงบนหน้า PDF ที่เลือก แล้วอัปโหลดกลับไปที่ Google Drive
+      // ประทับลายมือเขียนแก้ไขและลายเซ็น ผอ. ลงบนไฟล์ PDF แล้วบันทึกลง Google Drive
       if (stampOntoPdf && overlayExporterRef.current) {
         const exported = overlayExporterRef.current();
-        if (exported?.overlayPngDataUrl) {
+        if (exported?.overlays && exported.overlays.length > 0) {
           setMsg({
             type: "success",
-            text: `กำลังประทับความเห็นและลายเซ็นลงในหน้า ${exported.pageNumber} ของไฟล์ PDF และอัปโหลดไปยัง Google Drive...`,
+            text: `กำลังบันทึกลายเซ็นและลายมือเขียนของ ผอ. ลงในไฟล์ PDF และอัปโหลดไปยัง Google Drive...`,
           });
 
           const {
@@ -116,7 +111,7 @@ export default function ReviewPage() {
             body: JSON.stringify({
               fileId: sourceFileId || undefined,
               fileUrl: sourceFileUrl,
-              overlayPngDataUrl: exported.overlayPngDataUrl,
+              overlays: exported.overlays,
               pageNumber: exported.pageNumber,
               teacherName: selectedPlan.teacher_name,
               taskCode: selectedPlan.task_code,
@@ -369,8 +364,6 @@ export default function ReviewPage() {
               signerTitle="ผู้อำนวยการโรงเรียนวัดโป่งแรด(ปคุณวิทยาคาร)"
               commentText={reviewNote}
               onCommentChange={setReviewNote}
-              approvalChoice={approvalChoice}
-              onApprovalChoiceChange={setApprovalChoice}
               onBindExporter={(fn) => {
                 overlayExporterRef.current = fn;
               }}
@@ -387,7 +380,7 @@ export default function ReviewPage() {
                     className="accent-indigo-600 w-4 h-4"
                   />
                   <span>
-                    ประทับเครื่องหมาย ✓ + ความเห็น + ลายเซ็น ผอ. ลงในไฟล์ PDF และบันทึกลง Google Drive
+                    บันทึกลายเซ็น ผอ. และลายมือที่เขียนแก้ไขลงในไฟล์ PDF (อัปเดตทับไฟล์ใน Google Drive)
                   </span>
                 </label>
 

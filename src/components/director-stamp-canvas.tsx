@@ -5,13 +5,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Eraser,
-  FileDown,
   ImageUp,
   Loader2,
   Move,
+  PenLine,
   PenTool,
   RotateCcw,
-  Sparkles,
+  Trash2,
+  Undo2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
@@ -29,7 +30,7 @@ const MM_TO_PX = CANVAS_W / 210; // A4 width = 210mm
 const BLUE_INK = "#1a2fa0";
 
 const STORAGE_SIG_KEY = "pongrad_director_sig_v2";
-const STORAGE_LAYOUT_KEY = "pongrad_director_layout_v2";
+const STORAGE_SIG_LAYOUT_KEY = "pongrad_director_sig_layout_v3";
 
 const THAI_MONTHS_FULL = [
   "มกราคม",
@@ -61,101 +62,34 @@ function formatThaiFullDate(isoDate: string, useThaiDigits: boolean): string {
   return useThaiDigits ? toThaiDigits(text) : text;
 }
 
-export const COMMENT_PRESETS: { label: string; text: string; choice: "allow" | "disallow" }[] = [
-  {
-    label: "อนุญาต (มาตรฐานตามตัวอย่าง)",
-    choice: "allow",
-    text: "แผนการจัดการเรียนรู้นี้ได้กำหนดวัตถุประสงค์การเรียนรู้ กิจกรรมการเรียนการสอน วัดผลประเมินผลสอดคล้องกัน เลือกใช้สื่อได้เหมาะสม ใช้สอนได้",
-  },
-  {
-    label: "อนุญาต (ระดับปฐมวัย)",
-    choice: "allow",
-    text: "แผนการจัดประสบการณ์เรียนรู้มีความครบถ้วนสมบูรณ์ กิจกรรมเหมาะสมกับพัฒนาการของผู้เรียน อนุญาตให้นำไปใช้จัดกิจกรรมได้",
-  },
-  {
-    label: "รับทราบบันทึกหลังสอน",
-    choice: "allow",
-    text: "ได้ตรวจบันทึกหลังการจัดการเรียนรู้แล้ว รับทราบผลการจัดการเรียนรู้และการนำสื่อมาพัฒนาผู้เรียนได้อย่างเหมาะสม",
-  },
-  {
-    label: "ให้ปรับปรุงแก้ไข",
-    choice: "disallow",
-    text: "เห็นควรปรับปรุงแก้ไขรายละเอียดของแผนการจัดการเรียนรู้ตามข้อเสนอแนะก่อนนำไปใช้สอน",
-  },
-];
-
-interface BoxPos {
+interface SigLayoutState {
   x: number; // mm (0..210)
-  y: number; // mm (0..297)
+  y: number; // mm
   w: number; // mm
   h: number; // mm
-}
-
-interface StampLayoutState {
-  tick: BoxPos;
-  comment: BoxPos;
-  sig: BoxPos;
-  tickStyle: "tick-only" | "full-box";
-  indentFirstLine: boolean;
-  fontSizeMm: number;
-  lineGapMm: number;
   sigWidthMm: number;
   showSignerCaption: boolean;
   useThaiNumeralDate: boolean;
+  showSignatureOnDoc: boolean;
 }
 
-const DEFAULT_LAYOUT: StampLayoutState = {
-  // พิกัดเริ่มต้นตรงตามหน้าแรก "บันทึกข้อความ ขออนุญาตใช้แผนการจัดการเรียนรู้"
-  tick: { x: 29.5, y: 187.5, w: 12, h: 10 },
-  comment: { x: 29.5, y: 208.5, w: 152, h: 18 },
-  sig: { x: 102, y: 223.5, w: 38, h: 16 },
-  tickStyle: "tick-only",
-  indentFirstLine: true,
-  fontSizeMm: 4.1,
-  lineGapMm: 7.8,
-  sigWidthMm: 36,
-  showSignerCaption: false,
+const DEFAULT_SIG_LAYOUT: SigLayoutState = {
+  x: 118,
+  y: 232,
+  w: 45,
+  h: 24,
+  sigWidthMm: 42,
+  showSignerCaption: true,
   useThaiNumeralDate: true,
+  showSignatureOnDoc: true,
 };
 
-function wrapThaiLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidthPx: number,
-  firstLineIndentPx: number
-): { line: string; indentPx: number }[] {
-  const out: { line: string; indentPx: number }[] = [];
-  const paragraphs = (text || "").split("\n");
-  let isFirstOverall = true;
-
-  for (const para of paragraphs) {
-    let current = "";
-    let currentIndent = isFirstOverall ? firstLineIndentPx : 0;
-    let limit = Math.max(40, maxWidthPx - currentIndent);
-
-    for (const ch of para) {
-      if (ctx.measureText(current + ch).width > limit && current) {
-        out.push({ line: current, indentPx: currentIndent });
-        current = ch;
-        isFirstOverall = false;
-        currentIndent = 0;
-        limit = Math.max(40, maxWidthPx);
-      } else {
-        current += ch;
-      }
-    }
-    if (current || para === "") {
-      out.push({ line: current, indentPx: currentIndent });
-      isFirstOverall = false;
-    }
-  }
-  return out;
+interface PenStroke {
+  color: string;
+  widthPx: number;
+  points: { xMm: number; yMm: number }[];
 }
 
-/**
- * แปลงรูปลายเซ็นที่ถ่ายจากกระดาษขาว (JPG/PNG) ให้พื้นหลังขาวกลายเป็นโปร่งใส
- * และปรับเส้นปากกาให้เป็นสีน้ำเงินหมึกซึม (#1a2fa0)
- */
 async function normalizeSignatureToBlueTransparentDataUrl(srcUrl: string): Promise<string> {
   const img = new Image();
   img.crossOrigin = "anonymous";
@@ -190,7 +124,6 @@ async function normalizeSignatureToBlueTransparentDataUrl(srcUrl: string): Promi
     if (lum > 232) {
       d[i + 3] = 0;
     } else {
-      // ย้อมเป็นสีน้ำเงินปากกาหมึกซึม (#1a2fa0 -> R:26, G:47, B:160)
       const darkness = Math.min(1, Math.max(0, (232 - lum) / 140));
       d[i] = 26;
       d[i + 1] = 47;
@@ -214,7 +147,7 @@ async function loadPdfJsClient() {
 }
 
 export interface DirectorOverlayExport {
-  overlayPngDataUrl: string;
+  overlays: { pageNumber: number; overlayPngDataUrl: string }[];
   pageNumber: number;
 }
 
@@ -225,8 +158,6 @@ interface DirectorStampCanvasProps {
   signerTitle: string;
   commentText: string;
   onCommentChange: (val: string) => void;
-  approvalChoice: "allow" | "disallow";
-  onApprovalChoiceChange: (choice: "allow" | "disallow") => void;
   onBindExporter: (fn: (() => DirectorOverlayExport | null) | null) => void;
 }
 
@@ -237,8 +168,6 @@ export function DirectorStampCanvas({
   signerTitle,
   commentText,
   onCommentChange,
-  approvalChoice,
-  onApprovalChoiceChange,
   onBindExporter,
 }: DirectorStampCanvasProps) {
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -247,11 +176,21 @@ export function DirectorStampCanvas({
   const sigImageRef = useRef<HTMLImageElement | null>(null);
 
   const [canvasHeight, setCanvasHeight] = useState(1754);
+  const pageHeightsRef = useRef<Record<number, number>>({});
   const [pdfDocProxy, setPdfDocProxy] = useState<any>(null);
   const [totalPages, setTotalPages] = useState(1);
   const [pageNumber, setPageNumber] = useState(1);
+  const [sigPageNumber, setSigPageNumber] = useState(1);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // โหมดการใช้งานบนกระดาษ: "move-sig" = ย้ายลายเซ็น, "pen" = เขียนข้อความแก้ไขด้วยลายมือบนกระดาษ
+  const [toolMode, setToolMode] = useState<"move-sig" | "pen">("move-sig");
+  const [penColor, setPenColor] = useState("#dc2626"); // สีแดงเริ่มต้นสำหรับเขียนจุดที่ต้องแก้ไข
+  const [penWidth, setPenWidth] = useState(3.8);
+  const [strokesByPage, setStrokesByPage] = useState<Record<number, PenStroke[]>>({});
+  const strokesByPageRef = useRef<Record<number, PenStroke[]>>({});
+  const activeStrokeRef = useRef<PenStroke | null>(null);
 
   const [sigDataUrl, setSigDataUrl] = useState<string | null>(null);
   const [showDrawModal, setShowDrawModal] = useState(false);
@@ -263,24 +202,24 @@ export function DirectorStampCanvas({
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   });
 
-  const [layout, setLayout] = useState<StampLayoutState>(DEFAULT_LAYOUT);
-  const layoutRef = useRef<StampLayoutState>(DEFAULT_LAYOUT);
-  const dragTargetRef = useRef<{
-    key: "tick" | "comment" | "sig";
-    dx: number;
-    dy: number;
-  } | null>(null);
+  const [layout, setLayout] = useState<SigLayoutState>(DEFAULT_SIG_LAYOUT);
+  const layoutRef = useRef<SigLayoutState>(DEFAULT_SIG_LAYOUT);
+  const dragSigRef = useRef<{ dx: number; dy: number } | null>(null);
 
   useEffect(() => {
     layoutRef.current = layout;
   }, [layout]);
+
+  useEffect(() => {
+    strokesByPageRef.current = strokesByPage;
+  }, [strokesByPage]);
 
   // โหลดลายเซ็นและพิกัดที่เคยบันทึกไว้ในเครื่อง
   useEffect(() => {
     try {
       const savedSig = localStorage.getItem(STORAGE_SIG_KEY);
       if (savedSig) setSigDataUrl(savedSig);
-      const savedLayout = localStorage.getItem(STORAGE_LAYOUT_KEY);
+      const savedLayout = localStorage.getItem(STORAGE_SIG_LAYOUT_KEY);
       if (savedLayout) {
         const parsed = JSON.parse(savedLayout);
         setLayout((prev) => ({ ...prev, ...parsed }));
@@ -290,7 +229,6 @@ export function DirectorStampCanvas({
     }
   }, []);
 
-  // แปลง sigDataUrl เป็น HTMLImageElement สำหรับวาดบน Canvas
   useEffect(() => {
     if (!sigDataUrl) {
       sigImageRef.current = null;
@@ -305,7 +243,6 @@ export function DirectorStampCanvas({
     img.src = sigDataUrl;
   }, [sigDataUrl]);
 
-  // โหลดฟอนต์ Sarabun เพื่อให้ Canvas วาดภาษาไทยได้สวยงามตั้งแต่ครั้งแรก
   useEffect(() => {
     if (typeof document !== "undefined" && document.fonts) {
       Promise.all([
@@ -353,7 +290,8 @@ export function DirectorStampCanvas({
 
         setPdfDocProxy(pdf);
         setTotalPages(pdf.numPages);
-        setPageNumber(1); // เริ่มที่หน้าแรก (บันทึกข้อความ) เสมอตามรูปแบบของโรงเรียน
+        setPageNumber(1);
+        setSigPageNumber(pdf.numPages); // ค่าเริ่มต้นวางลายเซ็นหน้าสุดท้าย หรือกดย้ายมาหน้าปัจจุบันได้ทันที
       } catch (err: any) {
         if (!cancelled) {
           setPdfError(err?.message || "ไม่สามารถโหลดตัวอย่างหน้ากระดาษ PDF ได้");
@@ -372,7 +310,6 @@ export function DirectorStampCanvas({
     };
   }, [fileId, fileUrl]);
 
-  // เรนเดอร์หน้า PDF ที่เลือกเป็นพื้นหลัง
   useEffect(() => {
     let cancelled = false;
     async function renderPdfPage() {
@@ -383,6 +320,7 @@ export function DirectorStampCanvas({
         const scale = CANVAS_W / Math.max(1, vp0.width);
         const vp = page.getViewport({ scale });
         const h = Math.round(vp.height);
+        pageHeightsRef.current[pageNumber] = h;
 
         const off = document.createElement("canvas");
         off.width = CANVAS_W;
@@ -403,110 +341,60 @@ export function DirectorStampCanvas({
     };
   }, [pdfDocProxy, pageNumber]);
 
-  const drawOverlayElements = useCallback(
-    (ctx: CanvasRenderingContext2D, showGuides: boolean) => {
+  const drawPageOverlay = useCallback(
+    (ctx: CanvasRenderingContext2D, targetPage: number, showGuides: boolean) => {
       const k = MM_TO_PX;
       const cur = layoutRef.current;
+
+      // 1. วาดเส้นลายมือเขียนแก้ไขของ ผอ. ในหน้านี้
+      const pageStrokes = strokesByPageRef.current[targetPage] || [];
+      const allStrokes =
+        targetPage === pageNumber && activeStrokeRef.current
+          ? [...pageStrokes, activeStrokeRef.current]
+          : pageStrokes;
+
+      for (const stroke of allStrokes) {
+        if (!stroke.points || stroke.points.length === 0) continue;
+        ctx.save();
+        ctx.strokeStyle = stroke.color;
+        ctx.fillStyle = stroke.color;
+        ctx.lineWidth = stroke.widthPx;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        if (stroke.points.length === 1) {
+          ctx.beginPath();
+          ctx.arc(
+            stroke.points[0].xMm * k,
+            stroke.points[0].yMm * k,
+            stroke.widthPx / 2,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(stroke.points[0].xMm * k, stroke.points[0].yMm * k);
+          for (let i = 1; i < stroke.points.length; i++) {
+            ctx.lineTo(stroke.points[i].xMm * k, stroke.points[i].yMm * k);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 2. วาดลายเซ็น ผอ. (เฉพาะหน้าที่กำหนดให้วางลายเซ็น และเปิดแสดงลายเซ็นอยู่)
+      if (!cur.showSignatureOnDoc || targetPage !== sigPageNumber) {
+        return;
+      }
 
       ctx.save();
       ctx.fillStyle = BLUE_INK;
       ctx.strokeStyle = BLUE_INK;
       ctx.textBaseline = "top";
 
-      // --- 1. วาดเครื่องหมายถูก ✓ (อนุญาต / ไม่อนุญาต) ---
-      const tickX = cur.tick.x * k;
-      const tickY =
-        (cur.tick.y + (approvalChoice === "disallow" && cur.tickStyle === "tick-only" ? 8.2 : 0)) *
-        k;
-
-      if (cur.tickStyle === "tick-only") {
-        const size = 5.4 * k;
-        ctx.lineWidth = 3.6;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.beginPath();
-        ctx.moveTo(tickX + size * 0.1, tickY + size * 0.52);
-        ctx.lineTo(tickX + size * 0.42, tickY + size * 0.86);
-        ctx.lineTo(tickX + size * 1.15, tickY - size * 0.12);
-        ctx.stroke();
-
-        cur.tick.w = 8;
-        cur.tick.h = 8;
-        if (showGuides) {
-          ctx.save();
-          ctx.strokeStyle = "rgba(37, 99, 235, 0.45)";
-          ctx.setLineDash([5, 4]);
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(tickX - 4, tickY - 4, size * 1.3 + 8, size + 8);
-          ctx.restore();
-        }
-      } else {
-        const pt = cur.fontSizeMm * k;
-        ctx.font = `600 ${pt}px 'TH Sarabun New', Sarabun, sans-serif`;
-        const opts = [
-          { key: "allow", label: "อนุญาต" },
-          { key: "disallow", label: "ไม่อนุญาต" },
-        ];
-        const boxS = pt * 0.78;
-        const rowGap = pt * 1.45;
-        opts.forEach((o, idx) => {
-          const ry = cur.tick.y * k + idx * rowGap;
-          ctx.lineWidth = 2;
-          ctx.strokeRect(tickX, ry + 2, boxS, boxS);
-          if (o.key === approvalChoice) {
-            ctx.lineWidth = 3.2;
-            ctx.beginPath();
-            ctx.moveTo(tickX + boxS * 0.15, ry + 2 + boxS * 0.55);
-            ctx.lineTo(tickX + boxS * 0.42, ry + 2 + boxS * 0.85);
-            ctx.lineTo(tickX + boxS * 1.15, ry + 2 - boxS * 0.15);
-            ctx.stroke();
-          }
-          ctx.fillText(o.label, tickX + boxS + 10, ry);
-        });
-        cur.tick.w = 34;
-        cur.tick.h = (rowGap * 2) / k;
-        if (showGuides) {
-          ctx.save();
-          ctx.strokeStyle = "rgba(37, 99, 235, 0.45)";
-          ctx.setLineDash([5, 4]);
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(tickX - 4, cur.tick.y * k - 4, cur.tick.w * k, cur.tick.h * k + 6);
-          ctx.restore();
-        }
-      }
-
-      // --- 2. วาดข้อความความเห็นหลังคำว่า "เพราะ..." ---
-      if (commentText.trim()) {
-        const pt = cur.fontSizeMm * k;
-        const lineGapPx = cur.lineGapMm * k;
-        ctx.font = `600 ${pt}px 'TH Sarabun New', Sarabun, sans-serif`;
-        ctx.textAlign = "left";
-
-        const cx = cur.comment.x * k;
-        const cy = cur.comment.y * k;
-        const maxW = cur.comment.w * k;
-        const firstIndent = cur.indentFirstLine ? 13 * k : 0;
-
-        const wrapped = wrapThaiLines(ctx, commentText.trim(), maxW, firstIndent);
-        wrapped.forEach((item, i) => {
-          ctx.fillText(item.line, cx + item.indentPx, cy + i * lineGapPx);
-        });
-
-        cur.comment.h = Math.max(10, (wrapped.length * lineGapPx) / k + 2);
-
-        if (showGuides) {
-          ctx.save();
-          ctx.strokeStyle = "rgba(37, 99, 235, 0.45)";
-          ctx.setLineDash([5, 4]);
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(cx - 4, cy - 3, maxW + 8, cur.comment.h * k);
-          ctx.restore();
-        }
-      }
-
-      // --- 3. วาดลายเซ็น ผอ. (+ ชื่อ/ตำแหน่ง/วันที่ หากเปิดใช้งาน) ---
-      const sx = cur.sig.x * k;
-      const sy = cur.sig.y * k;
+      const sx = cur.x * k;
+      const sy = cur.y * k;
       const sw = cur.sigWidthMm * k;
       let currentY = sy;
 
@@ -514,16 +402,16 @@ export function DirectorStampCanvas({
         const img = sigImageRef.current;
         const sh = (img.height / Math.max(1, img.width)) * sw;
         ctx.drawImage(img, sx, currentY, sw, sh);
-        currentY += sh + 2;
-        cur.sig.w = cur.sigWidthMm;
-        cur.sig.h = sh / k + (cur.showSignerCaption ? 18 : 2);
+        currentY += sh + 4;
+        cur.w = cur.sigWidthMm;
+        cur.h = sh / k + (cur.showSignerCaption ? 20 : 2);
       } else {
-        cur.sig.w = cur.sigWidthMm;
-        cur.sig.h = cur.showSignerCaption ? 24 : 12;
+        cur.w = cur.sigWidthMm;
+        cur.h = cur.showSignerCaption ? 24 : 14;
       }
 
       if (cur.showSignerCaption) {
-        const pt = cur.fontSizeMm * k;
+        const pt = 4.1 * k;
         const lh = pt * 1.38;
         ctx.font = `600 ${pt}px 'TH Sarabun New', Sarabun, sans-serif`;
         ctx.textAlign = "center";
@@ -546,21 +434,22 @@ export function DirectorStampCanvas({
 
       if (showGuides) {
         ctx.save();
-        ctx.strokeStyle = "rgba(219, 39, 119, 0.55)";
+        ctx.strokeStyle =
+          toolMode === "move-sig" ? "rgba(219, 39, 119, 0.75)" : "rgba(148, 163, 184, 0.5)";
         ctx.setLineDash([5, 4]);
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(sx - 4, sy - 4, cur.sig.w * k + 8, cur.sig.h * k + 8);
+        ctx.lineWidth = 1.8;
+        ctx.strokeRect(sx - 4, sy - 4, cur.w * k + 8, cur.h * k + 8);
         if (!sigImageRef.current) {
-          ctx.fillStyle = "rgba(219, 39, 119, 0.8)";
+          ctx.fillStyle = "rgba(219, 39, 119, 0.85)";
           ctx.font = `600 18px Sarabun, sans-serif`;
-          ctx.fillText("ตำแหน่งวางลายเซ็น ผอ.", sx + 6, sy + 10);
+          ctx.fillText("กรอบลายเซ็น ผอ. (ลากย้ายได้)", sx + 6, sy + 10);
         }
         ctx.restore();
       }
 
       ctx.restore();
     },
-    [approvalChoice, commentText, signDateIso, signerName, signerTitle]
+    [pageNumber, sigPageNumber, signDateIso, signerName, signerTitle, toolMode]
   );
 
   const renderPreview = useCallback(
@@ -579,43 +468,67 @@ export function DirectorStampCanvas({
         ctx.drawImage(basePageCanvasRef.current, 0, 0, CANVAS_W, h);
       }
 
-      drawOverlayElements(ctx, true);
+      drawPageOverlay(ctx, pageNumber, true);
     },
-    [canvasHeight, drawOverlayElements]
+    [canvasHeight, drawPageOverlay, pageNumber]
   );
 
   useEffect(() => {
     renderPreview();
-  }, [layout, approvalChoice, commentText, signDateIso, renderPreview]);
+  }, [layout, strokesByPage, sigPageNumber, signDateIso, toolMode, renderPreview]);
 
-  // ผูกฟังก์ชันส่งออกเฉพาะเลเยอร์หมึกสีน้ำเงินพื้นหลังโปร่งใส (ไม่มีเส้นประ) ให้หน้าตรวจแผน
+  // ส่งออกเฉพาะหน้าที่มีลายมือเขียนแก้ไข หรือมีลายเซ็น ผอ.
   useEffect(() => {
     const exporter = (): DirectorOverlayExport | null => {
-      const off = document.createElement("canvas");
-      off.width = CANVAS_W;
-      off.height = canvasHeight;
-      const ctx = off.getContext("2d");
-      if (!ctx) return null;
-      ctx.clearRect(0, 0, CANVAS_W, canvasHeight);
-      drawOverlayElements(ctx, false);
+      const cur = layoutRef.current;
+      const pagesToExport = new Set<number>();
+
+      for (const [pStr, list] of Object.entries(strokesByPageRef.current)) {
+        if (list && list.length > 0) {
+          pagesToExport.add(Number(pStr));
+        }
+      }
+
+      if (cur.showSignatureOnDoc && (sigImageRef.current || cur.showSignerCaption)) {
+        pagesToExport.add(sigPageNumber);
+      }
+
+      if (pagesToExport.size === 0) return null;
+
+      const overlays: { pageNumber: number; overlayPngDataUrl: string }[] = [];
+      for (const pNum of Array.from(pagesToExport).sort((a, b) => a - b)) {
+        const h = pageHeightsRef.current[pNum] || canvasHeight;
+        const off = document.createElement("canvas");
+        off.width = CANVAS_W;
+        off.height = h;
+        const ctx = off.getContext("2d");
+        if (!ctx) continue;
+        ctx.clearRect(0, 0, CANVAS_W, h);
+        drawPageOverlay(ctx, pNum, false);
+        overlays.push({
+          pageNumber: pNum,
+          overlayPngDataUrl: off.toDataURL("image/png"),
+        });
+      }
+
       return {
-        overlayPngDataUrl: off.toDataURL("image/png"),
-        pageNumber,
+        overlays,
+        pageNumber: sigPageNumber,
       };
     };
+
     onBindExporter(exporter);
     return () => onBindExporter(null);
-  }, [canvasHeight, drawOverlayElements, onBindExporter, pageNumber]);
+  }, [canvasHeight, drawPageOverlay, onBindExporter, sigPageNumber]);
 
-  const saveLayoutToStorage = (next: StampLayoutState) => {
+  const saveLayoutToStorage = (next: SigLayoutState) => {
     try {
-      localStorage.setItem(STORAGE_LAYOUT_KEY, JSON.stringify(next));
+      localStorage.setItem(STORAGE_SIG_LAYOUT_KEY, JSON.stringify(next));
     } catch {
       // ignore
     }
   };
 
-  // ระบบลากวาง (Pointer Drag & Drop) เหมือนใน HTML ต้นแบบ
   const pointerToMm = (e: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
     const cv = previewCanvasRef.current!;
     const rect = cv.getBoundingClientRect();
@@ -624,61 +537,108 @@ export function DirectorStampCanvas({
     return [xMm, yMm];
   };
 
-  const isHit = (box: BoxPos, x: number, y: number, extraY = 0) => {
-    const by = box.y + extraY;
-    return x >= box.x - 2 && x <= box.x + box.w + 2 && y >= by - 2 && y <= by + box.h + 2;
-  };
-
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const [x, y] = pointerToMm(e);
-    const cur = layoutRef.current;
-    const tickExtraY =
-      approvalChoice === "disallow" && cur.tickStyle === "tick-only" ? 8.2 : 0;
 
-    let hitKey: "sig" | "comment" | "tick" | null = null;
-    if (isHit(cur.sig, x, y)) hitKey = "sig";
-    else if (isHit(cur.comment, x, y)) hitKey = "comment";
-    else if (isHit(cur.tick, x, y, tickExtraY)) hitKey = "tick";
-
-    if (hitKey) {
-      dragTargetRef.current = {
-        key: hitKey,
-        dx: x - cur[hitKey].x,
-        dy: y - cur[hitKey].y,
+    if (toolMode === "pen") {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      activeStrokeRef.current = {
+        color: penColor,
+        widthPx: penWidth,
+        points: [{ xMm: x, yMm: y }],
       };
+      renderPreview();
+      return;
+    }
+
+    const cur = layoutRef.current;
+    if (!cur.showSignatureOnDoc) return;
+
+    // หากคลิกในโหมดย้ายลายเซ็นบนหน้าอื่น หรือคลิกที่กรอบลายเซ็น
+    const inSigBox =
+      pageNumber === sigPageNumber &&
+      x >= cur.x - 4 &&
+      x <= cur.x + cur.w + 4 &&
+      y >= cur.y - 4 &&
+      y <= cur.y + cur.h + 4;
+
+    if (inSigBox) {
+      dragSigRef.current = { dx: x - cur.x, dy: y - cur.y };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } else if (pageNumber !== sigPageNumber) {
+      // ถ้าย้ายมาหน้าอื่นแล้วแตะวางในโหมดย้ายลายเซ็น ให้ดึงลายเซ็นมาหน้านี้ทันที
+      setSigPageNumber(pageNumber);
+      const next = {
+        ...cur,
+        x: Math.max(5, Math.min(180, x - cur.w / 2)),
+        y: Math.max(5, Math.min(275, y - 5)),
+      };
+      setLayout(next);
+      layoutRef.current = next;
+      dragSigRef.current = { dx: cur.w / 2, dy: 5 };
       e.currentTarget.setPointerCapture(e.pointerId);
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!dragTargetRef.current) return;
     const [x, y] = pointerToMm(e);
-    const { key, dx, dy } = dragTargetRef.current;
-    const nextX = Math.max(2, Math.min(198, x - dx));
-    const nextY = Math.max(2, Math.min(290, y - dy));
+
+    if (toolMode === "pen") {
+      if (!activeStrokeRef.current) return;
+      activeStrokeRef.current.points.push({ xMm: x, yMm: y });
+      renderPreview();
+      return;
+    }
+
+    if (!dragSigRef.current) return;
+    const { dx, dy } = dragSigRef.current;
+    const nextX = Math.max(2, Math.min(195, x - dx));
+    const nextY = Math.max(2, Math.min(285, y - dy));
 
     setLayout((prev) => {
-      const updated = {
-        ...prev,
-        [key]: {
-          ...prev[key],
-          x: nextX,
-          y: nextY,
-        },
-      };
+      const updated = { ...prev, x: nextX, y: nextY };
       layoutRef.current = updated;
       return updated;
     });
   };
 
   const handlePointerUp = () => {
-    if (dragTargetRef.current) {
-      dragTargetRef.current = null;
+    if (toolMode === "pen" && activeStrokeRef.current) {
+      const finished = activeStrokeRef.current;
+      activeStrokeRef.current = null;
+      setStrokesByPage((prev) => {
+        const list = prev[pageNumber] || [];
+        const next = { ...prev, [pageNumber]: [...list, finished] };
+        strokesByPageRef.current = next;
+        return next;
+      });
+      return;
+    }
+
+    if (dragSigRef.current) {
+      dragSigRef.current = null;
       saveLayoutToStorage(layoutRef.current);
     }
   };
 
-  // อัปโหลดไฟล์รูปลายเซ็นจริง (PNG/JPG) แล้วตัดพื้นขาวเป็นใส + หมึกน้ำเงิน
+  const handleUndoStroke = () => {
+    setStrokesByPage((prev) => {
+      const list = prev[pageNumber] || [];
+      if (list.length === 0) return prev;
+      const next = { ...prev, [pageNumber]: list.slice(0, -1) };
+      strokesByPageRef.current = next;
+      return next;
+    });
+  };
+
+  const handleClearPageStrokes = () => {
+    setStrokesByPage((prev) => {
+      const next = { ...prev, [pageNumber]: [] };
+      strokesByPageRef.current = next;
+      return next;
+    });
+  };
+
   const handleUploadSigFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -695,7 +655,6 @@ export function DirectorStampCanvas({
     }
   };
 
-  // วาดลายเซ็นสดบน Modal
   const startDrawSig = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const cv = drawPadRef.current;
     if (!cv) return;
@@ -746,190 +705,160 @@ export function DirectorStampCanvas({
     if (cv && ctx) ctx.clearRect(0, 0, cv.width, cv.height);
   };
 
+  const currentPageStrokeCount = (strokesByPage[pageNumber] || []).length;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-      {/* ฝั่งซ้าย: ตั้งค่ากล่องความเห็นผู้บริหารและลายเซ็น */}
+      {/* ฝั่งซ้าย: โหมดเขียนแก้ไขด้วยลายมือ & ลายเซ็น ผอ. */}
       <div className="lg:col-span-5 space-y-3 bg-slate-50/90 p-4 rounded-2xl border border-slate-200">
-        <div className="flex items-center justify-between">
-          <h4 className="text-xs sm:text-sm font-bold text-indigo-900 flex items-center gap-1.5">
-            <Sparkles className="w-4 h-4 text-indigo-600" />
-            กล่องความเห็นและลายเซ็น ผอ. (ลากวางบนกระดาษได้)
-          </h4>
-          <button
-            type="button"
-            onClick={() => {
-              setLayout(DEFAULT_LAYOUT);
-              saveLayoutToStorage(DEFAULT_LAYOUT);
-            }}
-            className="text-[11px] font-semibold text-slate-600 hover:text-indigo-700 inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-slate-200"
-            title="รีเซ็ตตำแหน่งกลับจุดมาตรฐาน"
-          >
-            <RotateCcw className="w-3 h-3" />
-            รีเซ็ตตำแหน่ง
-          </button>
-        </div>
-
-        {/* 1. เลือกผลการอนุญาต + รูปแบบเครื่องหมายถูก */}
-        <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-bold text-slate-700">1. เครื่องหมายพิจารณา (สีน้ำเงิน):</span>
-            <select
-              value={layout.tickStyle}
-              onChange={(e) => {
-                const next = {
-                  ...layout,
-                  tickStyle: e.target.value as "tick-only" | "full-box",
-                };
-                setLayout(next);
-                saveLayoutToStorage(next);
-              }}
-              className="px-2 py-1 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-700 bg-slate-50"
+        {/* สลับโหมดการทำงานบนกระดาษ */}
+        <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2.5">
+          <div className="text-xs font-bold text-slate-700">
+            เลือกโหมดใช้งานบนหน้ากระดาษ PDF:
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setToolMode("move-sig")}
+              className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                toolMode === "move-sig"
+                  ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                  : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+              }`}
             >
-              <option value="tick-only">เฉพาะเครื่องหมาย ✓ (วางทับช่องของครู)</option>
-              <option value="full-box">วาดทั้งกล่อง ☑ อนุญาต / ☐ ไม่อนุญาต</option>
-            </select>
+              <Move className="w-3.5 h-3.5" />
+              <span>ย้ายตำแหน่งลายเซ็น</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setToolMode("pen")}
+              className={`py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                toolMode === "pen"
+                  ? "bg-rose-600 text-white border-rose-600 shadow-xs"
+                  : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+              }`}
+            >
+              <PenLine className="w-3.5 h-3.5" />
+              <span>เขียนแก้ไขบนกระดาษ</span>
+            </button>
           </div>
 
-          <div className="flex items-center gap-4 pt-1">
-            <label className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 cursor-pointer">
-              <input
-                type="radio"
-                checked={approvalChoice === "allow"}
-                onChange={() => onApprovalChoiceChange("allow")}
-                className="accent-indigo-700"
-              />
-              <span>☑ อนุญาต</span>
-            </label>
-            <label className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-700 cursor-pointer">
-              <input
-                type="radio"
-                checked={approvalChoice === "disallow"}
-                onChange={() => onApprovalChoiceChange("disallow")}
-                className="accent-rose-600"
-              />
-              <span>☑ ไม่อนุญาต (ให้แก้ไข)</span>
-            </label>
-          </div>
+          {/* เครื่องมือปากกาเขียนแก้ไขบนกระดาษ */}
+          {toolMode === "pen" && (
+            <div className="pt-2 border-t border-slate-100 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-slate-600">สีปากกาเขียนแก้ไข:</span>
+                <div className="flex items-center gap-1.5">
+                  {[
+                    { color: "#dc2626", label: "แดง (แก้ไข)" },
+                    { color: "#1a2fa0", label: "น้ำเงิน" },
+                    { color: "#059669", label: "เขียว" },
+                  ].map((c) => (
+                    <button
+                      key={c.color}
+                      type="button"
+                      onClick={() => setPenColor(c.color)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border flex items-center gap-1 ${
+                        penColor === c.color
+                          ? "border-slate-800 bg-slate-100 text-slate-900"
+                          : "border-slate-200 bg-white text-slate-600"
+                      }`}
+                    >
+                      <span
+                        className="w-2.5 h-2.5 rounded-full inline-block"
+                        style={{ backgroundColor: c.color }}
+                      />
+                      <span>{c.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex-1">
+                  <label className="block text-[11px] text-slate-500 mb-0.5">
+                    ความหนาเส้นปากกา
+                  </label>
+                  <input
+                    type="range"
+                    min={2}
+                    max={9}
+                    step={0.5}
+                    value={penWidth}
+                    onChange={(e) => setPenWidth(Number(e.target.value))}
+                    className="w-full accent-rose-600"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 pt-3">
+                  <button
+                    type="button"
+                    disabled={currentPageStrokeCount === 0}
+                    onClick={handleUndoStroke}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 disabled:opacity-40 inline-flex items-center gap-1"
+                    title="ย้อนกลับเส้นล่าสุด"
+                  >
+                    <Undo2 className="w-3.5 h-3.5" />
+                    <span>ย้อนกลับ</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={currentPageStrokeCount === 0}
+                    onClick={handleClearPageStrokes}
+                    className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-xs font-semibold text-rose-700 disabled:opacity-40 inline-flex items-center gap-1"
+                    title="ลบเส้นที่เขียนในหน้านี้ทั้งหมด"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>ล้างหน้านี้</span>
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-rose-700 bg-rose-50/80 p-2 rounded-lg">
+                ✏️ ใช้ปากกา iPad, นิ้ว หรือเมาส์ ขีดวงกลมหรือเขียนข้อความแก้ไขลงบนหน้ากระดาษด้านขวาได้โดยตรงทุกหน้าครับ
+              </p>
+            </div>
+          )}
         </div>
 
-        {/* 2. ข้อความความเห็นหลังคำว่า "เพราะ..." */}
-        <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2">
+        {/* ลายเซ็น ผอ. (รูปแบบเดิมที่ติ๊กถูกไว้) */}
+        <div className="p-3.5 rounded-xl bg-white border border-slate-200/80 space-y-2.5">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">
-              2. ข้อความความเห็น ผอ. (ตรงบรรทัด &quot;เพราะ...&quot;)
-            </label>
-            <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer">
+            <label className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
               <input
                 type="checkbox"
-                checked={layout.indentFirstLine}
+                checked={layout.showSignatureOnDoc}
                 onChange={(e) => {
-                  const next = { ...layout, indentFirstLine: e.target.checked };
+                  const next = { ...layout, showSignatureOnDoc: e.target.checked };
                   setLayout(next);
                   saveLayoutToStorage(next);
                 }}
-                className="accent-indigo-700"
+                className="accent-indigo-600 w-3.5 h-3.5"
               />
-              <span>ย่อหน้าบรรทัดแรกหลบคำว่า &quot;เพราะ&quot;</span>
+              <span>ลายเซ็น ผอ. (จำไว้ใช้อัตโนมัติ)</span>
             </label>
-          </div>
-
-          {/* ปุ่มข้อความสำเร็จรูป */}
-          <div className="flex flex-wrap gap-1">
-            {COMMENT_PRESETS.map((p, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => {
-                  onCommentChange(p.text);
-                  onApprovalChoiceChange(p.choice);
-                }}
-                className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-200/80 transition-colors"
-              >
-                + {p.label}
-              </button>
-            ))}
-          </div>
-
-          <textarea
-            value={commentText}
-            onChange={(e) => onCommentChange(e.target.value)}
-            rows={3}
-            placeholder="พิมพ์ความเห็นของผู้บริหารที่จะแสดงบนเส้นประ..."
-            className="w-full p-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-
-          <div className="grid grid-cols-3 gap-2 pt-1 text-[11px]">
-            <div>
-              <label className="block text-slate-500 mb-0.5">ขนาดอักษร</label>
-              <input
-                type="range"
-                min={3.2}
-                max={5.5}
-                step={0.1}
-                value={layout.fontSizeMm}
-                onChange={(e) => {
-                  const next = { ...layout, fontSizeMm: Number(e.target.value) };
-                  setLayout(next);
-                  saveLayoutToStorage(next);
-                }}
-                className="w-full accent-indigo-600"
-              />
+            <div className="flex items-center gap-2">
+              {pageNumber !== sigPageNumber && layout.showSignatureOnDoc && (
+                <button
+                  type="button"
+                  onClick={() => setSigPageNumber(pageNumber)}
+                  className="text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200"
+                >
+                  ย้ายลายเซ็นมาหน้า {pageNumber}
+                </button>
+              )}
+              {sigDataUrl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSigDataUrl(null);
+                    localStorage.removeItem(STORAGE_SIG_KEY);
+                  }}
+                  className="text-[11px] text-rose-600 hover:underline inline-flex items-center gap-1"
+                >
+                  <Eraser className="w-3 h-3" />
+                  ลบลายเซ็น
+                </button>
+              )}
             </div>
-            <div>
-              <label className="block text-slate-500 mb-0.5">ระยะบรรทัด</label>
-              <input
-                type="range"
-                min={5.5}
-                max={12}
-                step={0.2}
-                value={layout.lineGapMm}
-                onChange={(e) => {
-                  const next = { ...layout, lineGapMm: Number(e.target.value) };
-                  setLayout(next);
-                  saveLayoutToStorage(next);
-                }}
-                className="w-full accent-indigo-600"
-              />
-            </div>
-            <div>
-              <label className="block text-slate-500 mb-0.5">ความกว้างข้อความ</label>
-              <input
-                type="range"
-                min={80}
-                max={175}
-                step={2}
-                value={layout.comment.w}
-                onChange={(e) => {
-                  const next = {
-                    ...layout,
-                    comment: { ...layout.comment, w: Number(e.target.value) },
-                  };
-                  setLayout(next);
-                  saveLayoutToStorage(next);
-                }}
-                className="w-full accent-indigo-600"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* 3. ลายเซ็นจริงของ ผอ. */}
-        <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-700">3. ลายเซ็น ผอ. (จำไว้ใช้อัตโนมัติ)</span>
-            {sigDataUrl && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSigDataUrl(null);
-                  localStorage.removeItem(STORAGE_SIG_KEY);
-                }}
-                className="text-[11px] text-rose-600 hover:underline inline-flex items-center gap-1"
-              >
-                <Eraser className="w-3 h-3" />
-                ลบลายเซ็น
-              </button>
-            )}
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -959,7 +888,7 @@ export function DirectorStampCanvas({
               <input
                 type="range"
                 min={20}
-                max={65}
+                max={75}
                 step={1}
                 value={layout.sigWidthMm}
                 onChange={(e) => {
@@ -1007,24 +936,47 @@ export function DirectorStampCanvas({
                   }}
                   className="accent-indigo-700"
                 />
-                <span>ใช้เลขไทย (๒ พ.ย. ๒๕๖๙)</span>
+                <span>ใช้เลขไทย (๑๖ พ.ย. ๒๕๖๙)</span>
               </label>
             </div>
           )}
+
+          <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500">
+            <span>
+              หน้าที่มีลายเซ็น: <b>หน้า {sigPageNumber}</b> / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setLayout(DEFAULT_SIG_LAYOUT);
+                saveLayoutToStorage(DEFAULT_SIG_LAYOUT);
+              }}
+              className="text-slate-600 hover:text-indigo-700 inline-flex items-center gap-1"
+            >
+              <RotateCcw className="w-3 h-3" />
+              รีเซ็ตตำแหน่งลายเซ็น
+            </button>
+          </div>
         </div>
 
-        <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200/70 text-[11px] text-indigo-900 flex items-start gap-2">
-          <Move className="w-4 h-4 shrink-0 text-indigo-600 mt-0.5" />
-          <span>
-            <b>วิธีจัดตำแหน่ง:</b> ใช้เมาส์หรือนิ้วลาก <b>เครื่องหมาย ✓</b>, <b>ข้อความความเห็น</b> และ{" "}
-            <b>ลายเซ็น</b> บนกระดาษด้านขวาไปวางตรงช่องของครูได้เลย ระบบจะจำตำแหน่งไว้ใช้กับแผนถัดไปให้อัตโนมัติครับ
-          </span>
+        {/* ช่องพิมพ์หมายเหตุแจ้งครูในระบบและ LINE */}
+        <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-1.5">
+          <label className="block text-xs font-bold text-slate-700">
+            หมายเหตุ / ข้อความแจ้งครูใน LINE (ถ้ามี):
+          </label>
+          <textarea
+            value={commentText}
+            onChange={(e) => onCommentChange(e.target.value)}
+            rows={2}
+            placeholder="พิมพ์ข้อเสนอแนะหรือจุดที่ให้แก้ไข (จะส่งแจ้งเตือนใน LINE ให้ครูทราบ)..."
+            className="w-full p-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
         </div>
       </div>
 
-      {/* ฝั่งขวา: ตัวอย่างหน้ากระดาษจริง (ลากวางได้เหมือน HTML ต้นแบบ) */}
+      {/* ฝั่งขวา: ตัวอย่างหน้ากระดาษ PDF จริง */}
       <div className="lg:col-span-7 flex flex-col items-center space-y-2 bg-slate-200/70 p-3 sm:p-4 rounded-2xl border border-slate-300">
-        {/* แถบเลือกหน้า */}
+        {/* แถบเลือกหน้า (เอาคำว่า บันทึกข้อความ ออกตามที่แจ้ง) */}
         <div className="w-full flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-2 rounded-xl shadow-xs">
           <div className="flex items-center gap-1.5">
             <button
@@ -1037,7 +989,6 @@ export function DirectorStampCanvas({
             </button>
             <span className="text-xs font-bold text-slate-700 px-2">
               หน้า {pageNumber} / {totalPages}
-              {pageNumber === 1 ? " (หน้าแรก - บันทึกข้อความ)" : ""}
             </span>
             <button
               type="button"
@@ -1050,20 +1001,22 @@ export function DirectorStampCanvas({
           </div>
 
           <span className="text-[11px] font-semibold text-indigo-700">
-            ลากวางองค์ประกอบสีน้ำเงินบนกระดาษได้โดยตรง
+            {toolMode === "pen"
+              ? "✏️ โหมดปากกา: เขียนข้อความแก้ไขลงบนกระดาษได้เลย"
+              : "✋ โหมดย้ายลายเซ็น: แตะลากลายเซ็นไปวางจุดที่ต้องการ"}
           </span>
         </div>
 
         {loadingPdf && (
           <div className="py-16 flex flex-col items-center justify-center text-slate-600 text-xs gap-2">
             <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
-            <span>กำลังโหลดหน้าเอกสาร PDF จริงจาก Google Drive...</span>
+            <span>กำลังโหลดหน้าเอกสาร PDF จาก Google Drive...</span>
           </div>
         )}
 
         {pdfError && (
           <div className="w-full p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs">
-            ⚠️ {pdfError} (ยังสามารถวางลากบนกระดาษตัวอย่างหรือบันทึกผลการตรวจได้ตามปกติ)
+            ⚠️ {pdfError}
           </div>
         )}
 
@@ -1075,12 +1028,16 @@ export function DirectorStampCanvas({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            className="w-full max-w-[540px] h-auto bg-white shadow-lg rounded-lg border border-slate-300 cursor-grab active:cursor-grabbing touch-none select-none"
+            className={`w-full max-w-[540px] h-auto bg-white shadow-lg rounded-lg border border-slate-300 touch-none select-none ${
+              toolMode === "pen"
+                ? "cursor-crosshair"
+                : "cursor-grab active:cursor-grabbing"
+            }`}
           />
         </div>
       </div>
 
-      {/* Modal สำหรับวาดลายเซ็นด้วยปากกา/เมาส์ */}
+      {/* Modal สำหรับวาดลายเซ็น ผอ. */}
       {showDrawModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
           <div className="bg-white rounded-2xl p-5 max-w-md w-full shadow-2xl space-y-3 border border-slate-200">
