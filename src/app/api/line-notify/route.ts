@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
-  getLineConfigStatus,
   getLineQuotaReport,
   sendLineFlexNotification,
 } from "@/lib/line-notify";
+import { POST as webhookPost } from "@/app/api/line/webhook/route";
 
 async function resolveTeacherEmail(planData: any): Promise<string | null> {
   if (
@@ -63,34 +63,15 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
 
-    // รองรับ LINE Webhook (เมื่อกด Verify ใน LINE Developers หรือพิมพ์ "ขอไอดี" ในกลุ่มเหมือนเว็บเก่า)
+    // รองรับ LINE Webhook (เมื่อกด Verify หรือพิมพ์ "เช็คแผน", "รอตรวจ", "ขอไอดี" ในกลุ่ม)
     if (Array.isArray(body?.events)) {
-      const event = body.events[0];
-      if (
-        event &&
-        event.type === "message" &&
-        event.message?.type === "text" &&
-        String(event.message.text || "").trim() === "ขอไอดี" &&
-        event.replyToken
-      ) {
-        const source = event.source || {};
-        const sourceId = source.groupId || source.roomId || source.userId || "ไม่พบ ID";
-        const { token } = getLineConfigStatus();
-        if (token) {
-          await fetch("https://api.line.me/v2/bot/message/reply", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              replyToken: event.replyToken,
-              messages: [{ type: "text", text: `ID ของกลุ่มนี้คือ:\n${sourceId}` }],
-            }),
-          }).catch(() => {});
-        }
-      }
-      return NextResponse.json({ status: "ok" });
+      return webhookPost(
+        new Request(request.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        })
+      );
     }
 
     const { eventType, planData, reviewData } = body;

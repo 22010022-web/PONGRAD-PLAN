@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { LessonPlan, PlanStatus } from "@/types/database";
@@ -13,6 +14,8 @@ import {
 
 export default function ReviewPage() {
   const { user, profile, isAdmin } = useAuth();
+  const params = useParams<{ id?: string }>();
+  const autoOpenedIdRef = useRef<string | null>(null);
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<LessonPlan | null>(null);
@@ -43,6 +46,21 @@ export default function ReviewPage() {
   useEffect(() => {
     loadPlansForReview();
   }, [user]);
+
+  useEffect(() => {
+    if (!isAdmin || plans.length === 0) return;
+    const targetId =
+      (typeof params?.id === "string" ? params.id : "") ||
+      (typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("id") || ""
+        : "");
+    if (!targetId || autoOpenedIdRef.current === targetId) return;
+    const found = plans.find((p) => p.id === targetId);
+    if (found) {
+      autoOpenedIdRef.current = targetId;
+      handleOpenPlanModal(found);
+    }
+  }, [isAdmin, params?.id, plans]);
 
   const handleOpenPlanModal = (p: LessonPlan) => {
     setSelectedPlan(p);
