@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { BookOpen, LayoutDashboard, PlusCircle, FileCheck, LogIn, LogOut, Settings, Wrench } from "lucide-react";
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, profile, teacher, isAdmin, schoolSettings, signOut } = useAuth();
 
   return (
@@ -131,7 +132,10 @@ export default function Navbar() {
                   </div>
                 </div>
                 <button
-                  onClick={() => signOut()}
+                  onClick={async () => {
+                    await signOut();
+                    router.push("/");
+                  }}
                   title="ออกจากระบบ"
                   className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
                 >
