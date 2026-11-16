@@ -582,13 +582,49 @@ export default function AdminPage() {
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={savingSettings}
-            className="px-6 py-3 rounded-xl bg-gradient-to-r from-pink-600 to-purple-600 text-white text-xs sm:text-sm font-bold shadow hover:shadow-md disabled:opacity-50"
-          >
-            {savingSettings ? "กำลังบันทึก..." : "✔ บันทึกการตั้งค่าโรงเรียน"}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={savingSettings}
+              className="px-6 py-3 rounded-xl bg-gradient-to-r from-pink-600 to-purple-600 text-white text-xs sm:text-sm font-bold shadow hover:shadow-md disabled:opacity-50"
+            >
+              {savingSettings ? "กำลังบันทึก..." : "✔ บันทึกการตั้งค่าโรงเรียน"}
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                setAlert(null);
+                try {
+                  const res = await fetch("/api/line-notify", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ eventType: "test_notify" }),
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok || data?.success === false) {
+                    setAlert({
+                      type: "error",
+                      text: `ส่งแจ้งเตือน LINE ไม่สำเร็จ: ${data?.error || data?.reason || "กรุณาตรวจสอบค่า LINE_CHANNEL_ACCESS_TOKEN และ LINE_GROUP_ID ใน Vercel"}`,
+                    });
+                  } else {
+                    setAlert({
+                      type: "success",
+                      text: "ส่งข้อความทดสอบเข้ากลุ่ม LINE โรงเรียนสำเร็จแล้ว!",
+                    });
+                  }
+                } catch (err: any) {
+                  setAlert({
+                    type: "error",
+                    text: err?.message || "ไม่สามารถเชื่อมต่อระบบแจ้งเตือน LINE ได้",
+                  });
+                }
+              }}
+              className="px-4 py-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs sm:text-sm font-bold transition-colors"
+            >
+              ทดสอบส่งแจ้งเตือน LINE
+            </button>
+          </div>
         </form>
       )}
 

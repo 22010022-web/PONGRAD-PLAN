@@ -244,8 +244,9 @@ export default function SubmitPlanPage() {
       if (insertErr) throw insertErr;
 
       // ส่งแจ้งเตือนเข้า LINE กลุ่มโรงเรียน
+      let lineWarning = "";
       try {
-        await fetch("/api/line-notify", {
+        const lineRes = await fetch("/api/line-notify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -257,11 +258,17 @@ export default function SubmitPlanPage() {
             },
           }),
         });
+        const lineJson = await lineRes.json().catch(() => ({}));
+        if (!lineRes.ok || lineJson?.success === false) {
+          lineWarning = ` (แต่แจ้งเตือน LINE ไม่สำเร็จ: ${lineJson?.error || lineJson?.reason || "ตรวจสอบการตั้งค่า LINE บน Vercel"})`;
+        }
       } catch (lineErr) {
         console.warn("LINE Notify failed:", lineErr);
       }
 
-      setSuccessMsg("ส่งแผนการจัดการเรียนรู้เรียบร้อยแล้ว! ข้อมูลแจ้งเตือนเข้า LINE กลุ่มโรงเรียนแล้วครับ");
+      setSuccessMsg(
+        `ส่งแผนการจัดการเรียนรู้เรียบร้อยแล้ว!${lineWarning || " ข้อมูลแจ้งเตือนเข้า LINE กลุ่มโรงเรียนแล้วครับ"}`
+      );
       setTimeout(() => {
         router.push("/my-plans");
       }, 2000);
