@@ -141,8 +141,8 @@ export default function SubmitPlanPage() {
     };
   }, [profile?.full_name, teacher?.name, teacher?.category, teacher?.default_subject, teacher?.grade_level, isAdmin]);
 
-  const [scopeType, setScopeType] = useState<"term" | "unit" | "week">("term");
-  const [scopeValue, setScopeValue] = useState(TERM_OPTIONS[0].value);
+  const [scopeType, setScopeType] = useState<"term" | "unit" | "week">("week");
+  const [scopeValue, setScopeValue] = useState(WEEK_OPTIONS[0].value);
   const [unitTitle, setUnitTitle] = useState("");
   const [subject, setSubject] = useState("");
   const [customSubject, setCustomSubject] = useState("");
@@ -170,12 +170,12 @@ export default function SubmitPlanPage() {
   }, [teacherProfileConfig]);
 
   useEffect(() => {
-    if (scopeType === "term") {
-      setScopeValue(TERM_OPTIONS[0].value);
+    if (scopeType === "week") {
+      setScopeValue(WEEK_OPTIONS[0].value);
     } else if (scopeType === "unit") {
       setScopeValue("หน่วยการเรียนรู้ที่ 1");
     } else {
-      setScopeValue(WEEK_OPTIONS[0].value);
+      setScopeValue(TERM_OPTIONS[0].value);
     }
   }, [scopeType]);
 
@@ -353,7 +353,7 @@ export default function SubmitPlanPage() {
             แบบฟอร์มส่งแผนการจัดการเรียนรู้
           </h1>
           <p className="text-xs text-slate-500">
-            ส่งได้ทั้งแบบ รวมเล่มรายภาคเรียน, รายหน่วยการเรียนรู้ (1–36) และ รายสัปดาห์ (1–20)
+            ส่งได้ทั้งแบบ รายสัปดาห์ (1–20), รายหน่วยการเรียนรู้ (1–36) และ รวมเล่มรายภาคเรียน
           </p>
         </div>
       </div>
@@ -373,34 +373,12 @@ export default function SubmitPlanPage() {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* เลือกรอยต่อรูปแบบการส่ง */}
+        {/* เลือกรูปแบบการส่ง: รายสัปดาห์ -> รายหน่วยการเรียนรู้ -> รวมเล่มรายภาคเรียน */}
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-2">
             1. เลือกรูปแบบการส่งแผนการสอน (เลือกได้ตามความพร้อม)
           </label>
           <div className={`grid gap-2 ${teacherProfileConfig.allowWeek ? "grid-cols-3" : "grid-cols-2"}`}>
-            <button
-              type="button"
-              onClick={() => setScopeType("term")}
-              className={`p-3 rounded-2xl text-xs sm:text-sm font-bold border transition-all ${
-                scopeType === "term"
-                  ? "bg-amber-500 text-white border-amber-600 shadow-md"
-                  : "bg-white/80 text-slate-600 border-slate-200 hover:bg-white"
-              }`}
-            >
-              📚 รวมเล่มรายภาคเรียน
-            </button>
-            <button
-              type="button"
-              onClick={() => setScopeType("unit")}
-              className={`p-3 rounded-2xl text-xs sm:text-sm font-bold border transition-all ${
-                scopeType === "unit"
-                  ? "bg-pink-600 text-white border-pink-700 shadow-md"
-                  : "bg-white/80 text-slate-600 border-slate-200 hover:bg-white"
-              }`}
-            >
-              📑 รายหน่วยการเรียนรู้
-            </button>
             {teacherProfileConfig.allowWeek && (
               <button
                 type="button"
@@ -414,21 +392,43 @@ export default function SubmitPlanPage() {
                 📅 รายสัปดาห์
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setScopeType("unit")}
+              className={`p-3 rounded-2xl text-xs sm:text-sm font-bold border transition-all ${
+                scopeType === "unit"
+                  ? "bg-pink-600 text-white border-pink-700 shadow-md"
+                  : "bg-white/80 text-slate-600 border-slate-200 hover:bg-white"
+              }`}
+            >
+              📑 รายหน่วยการเรียนรู้
+            </button>
+            <button
+              type="button"
+              onClick={() => setScopeType("term")}
+              className={`p-3 rounded-2xl text-xs sm:text-sm font-bold border transition-all ${
+                scopeType === "term"
+                  ? "bg-amber-500 text-white border-amber-600 shadow-md"
+                  : "bg-white/80 text-slate-600 border-slate-200 hover:bg-white"
+              }`}
+            >
+              📚 รวมเล่มรายภาคเรียน
+            </button>
           </div>
         </div>
 
         {/* Dropdown ประเภทย่อย */}
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-1.5">
-            2. ระบุหน่วย / ภาคเรียน {teacherProfileConfig.allowWeek ? "/ สัปดาห์" : ""}
+            2. ระบุ{teacherProfileConfig.allowWeek ? "สัปดาห์ / " : ""}หน่วย / ภาคเรียน
           </label>
-          {scopeType === "term" && (
+          {scopeType === "week" && teacherProfileConfig.allowWeek && (
             <select
               value={scopeValue}
               onChange={(e) => setScopeValue(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800"
             >
-              {TERM_OPTIONS.map((opt) => (
+              {WEEK_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
                 </option>
@@ -450,13 +450,13 @@ export default function SubmitPlanPage() {
             </select>
           )}
 
-          {scopeType === "week" && teacherProfileConfig.allowWeek && (
+          {scopeType === "term" && (
             <select
               value={scopeValue}
               onChange={(e) => setScopeValue(e.target.value)}
               className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800"
             >
-              {WEEK_OPTIONS.map((opt) => (
+              {TERM_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
                 </option>

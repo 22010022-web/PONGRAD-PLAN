@@ -433,9 +433,9 @@ export default function DashboardPage() {
               className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
             >
               <option value="">ทุกรูปแบบ</option>
-              <option value="term">📚 รวมเล่มรายภาคเรียน</option>
-              <option value="unit">📑 รายหน่วยการเรียนรู้</option>
               <option value="week">📅 รายสัปดาห์</option>
+              <option value="unit">📑 รายหน่วยการเรียนรู้</option>
+              <option value="term">📚 รวมเล่มรายภาคเรียน</option>
             </select>
 
             <select
