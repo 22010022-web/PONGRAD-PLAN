@@ -26,6 +26,150 @@ export function getLineConfigStatus() {
   };
 }
 
+export interface LineQuotaReport {
+  success: boolean;
+  configured: boolean;
+  hasToken: boolean;
+  hasGroupId: boolean;
+  error?: string;
+  quotaType?: "none" | "limited";
+  monthlyLimit?: number | null;
+  totalUsage?: number;
+  remaining?: number | null;
+  usagePercent?: number | null;
+  botName?: string | null;
+  botBasicId?: string | null;
+  groupMemberCount?: number | null;
+  estimatedPushesLeft?: number | null;
+  todayPushDelivery?: { status?: string; success?: number } | null;
+  checkedAt?: string;
+}
+
+export async function getLineQuotaReport(): Promise<LineQuotaReport> {
+  const { configured, hasToken, hasGroupId, token, groupId } = getLineConfigStatus();
+  if (!hasToken) {
+    return {
+      success: false,
+      configured,
+      hasToken,
+      hasGroupId,
+      error: "ยังไม่ได้ตั้งค่า LINE_CHANNEL_ACCESS_TOKEN ใน Vercel",
+    };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+  };
+
+  // วันที่ปัจจุบัน (YYYYMMDD) สำหรับเช็คสถิติการส่งข้อความรายวัน (Endpoint ที่ 3)
+  const nowBkk = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const yyyyMmDd = nowBkk.toISOString().slice(0, 10).replace(/-/g, "");
+
+  try {
+    const [quotaRes, consumptionRes, deliveryRes, botInfoRes, groupCountRes] =
+      await Promise.all([
+        // 1. เช็คเพดานโควตาข้อความสูงสุดประจำเดือน (Target limit)
+        fetch("https://api.line.me/v2/bot/message/quota", { headers, cache: "no-store" }),
+        // 2. เช็คจำนวนข้อความที่ส่งไปแล้วในเดือนนี้ (Consumption)
+        fetch("https://api.line.me/v2/bot/message/quota/consumption", {
+          headers,
+          cache: "no-store",
+        }),
+        // 3. เช็คสถิติการส่งข้อความ Push ประจำวัน (Delivery Push)
+        fetch(`https://api.line.me/v2/bot/message/delivery/push?date=${yyyyMmDd}`, {
+          headers,
+          cache: "no-store",
+        }).catch(() => null),
+        // ข้อมูลชื่อบอทและจำนวนคนในกลุ่ม (เพื่อคำนวณจำนวนครั้งที่ส่งเข้ากลุ่มได้จริง)
+        fetch("https://api.line.me/v2/bot/info", { headers, cache: "no-store" }).catch(
+          () => null
+        ),
+        hasGroupId && groupId.startsWith("C")
+          ? fetch(`https://api.line.me/v2/bot/group/${groupId}/members/count`, {
+              headers,
+              cache: "no-store",
+            }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+    if (!quotaRes.ok) {
+      const errText = await quotaRes.text();
+      return {
+        success: false,
+        configured,
+        hasToken,
+        hasGroupId,
+        error:
+          quotaRes.status === 401
+            ? "LINE_CHANNEL_ACCESS_TOKEN ไม่ถูกต้องหรือถูกยกเลิกแล้ว (HTTP 401)"
+            : `ตรวจสอบโควตา LINE ไม่สำเร็จ (HTTP ${quotaRes.status}): ${errText}`,
+      };
+    }
+
+    const quotaJson = await quotaRes.json().catch(() => ({}));
+    const consumptionJson = consumptionRes.ok
+      ? await consumptionRes.json().catch(() => ({}))
+      : {};
+    const deliveryJson =
+      deliveryRes && deliveryRes.ok ? await deliveryRes.json().catch(() => null) : null;
+    const botInfoJson =
+      botInfoRes && botInfoRes.ok ? await botInfoRes.json().catch(() => null) : null;
+    const groupCountJson =
+      groupCountRes && groupCountRes.ok
+        ? await groupCountRes.json().catch(() => null)
+        : null;
+
+    const quotaType: "none" | "limited" =
+      quotaJson?.type === "limited" ? "limited" : "none";
+    const monthlyLimit: number | null =
+      quotaType === "limited" && typeof quotaJson?.value === "number"
+        ? quotaJson.value
+        : null;
+    const totalUsage: number =
+      typeof consumptionJson?.totalUsage === "number" ? consumptionJson.totalUsage : 0;
+
+    const remaining =
+      monthlyLimit !== null ? Math.max(0, monthlyLimit - totalUsage) : null;
+    const usagePercent =
+      monthlyLimit && monthlyLimit > 0
+        ? Math.min(100, Math.round((totalUsage / monthlyLimit) * 1000) / 10)
+        : null;
+
+    const groupMemberCount =
+      typeof groupCountJson?.count === "number" ? groupCountJson.count : null;
+    const estimatedPushesLeft =
+      remaining !== null && groupMemberCount && groupMemberCount > 0
+        ? Math.floor(remaining / groupMemberCount)
+        : remaining;
+
+    return {
+      success: true,
+      configured,
+      hasToken,
+      hasGroupId,
+      quotaType,
+      monthlyLimit,
+      totalUsage,
+      remaining,
+      usagePercent,
+      botName: botInfoJson?.displayName || null,
+      botBasicId: botInfoJson?.basicId || null,
+      groupMemberCount,
+      estimatedPushesLeft,
+      todayPushDelivery: deliveryJson,
+      checkedAt: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      configured,
+      hasToken,
+      hasGroupId,
+      error: err?.message || "ไม่สามารถเชื่อมต่อ LINE API เพื่อเช็คโควตาได้",
+    };
+  }
+}
+
 export async function sendLineFlexNotification({
   title,
   subtitle,

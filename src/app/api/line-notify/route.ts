@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { getLineConfigStatus, sendLineFlexNotification } from "@/lib/line-notify";
+import {
+  getLineConfigStatus,
+  getLineQuotaReport,
+  sendLineFlexNotification,
+} from "@/lib/line-notify";
 
 async function resolveTeacherEmail(planData: any): Promise<string | null> {
   if (
@@ -47,12 +51,10 @@ async function resolveTeacherEmail(planData: any): Promise<string | null> {
 }
 
 export async function GET() {
-  const { configured, hasToken, hasGroupId } = getLineConfigStatus();
+  const report = await getLineQuotaReport();
   return NextResponse.json({
     status: "ok",
-    configured,
-    hasToken,
-    hasGroupId,
+    ...report,
     message: "LINE Webhook & Notify endpoint is ready",
   });
 }

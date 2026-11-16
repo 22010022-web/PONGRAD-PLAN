@@ -82,6 +82,22 @@ export default function AdminPage() {
   const [systemTitle, setSystemTitle] = useState(schoolSettings.system_title);
   const [logoUrl, setLogoUrl] = useState(schoolSettings.logo_url || "");
   const [savingSettings, setSavingSettings] = useState(false);
+  const [lineQuota, setLineQuota] = useState<any>(null);
+  const [checkingQuota, setCheckingQuota] = useState(false);
+  const [testingLine, setTestingLine] = useState(false);
+
+  const handleCheckLineQuota = async () => {
+    setCheckingQuota(true);
+    try {
+      const res = await fetch("/api/line-notify", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (data) setLineQuota(data);
+    } catch {
+      // ignore
+    } finally {
+      setCheckingQuota(false);
+    }
+  };
 
   // 2. Teachers management states
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -156,6 +172,7 @@ export default function AdminPage() {
     if (isAdmin) {
       loadTeachers();
       loadPlans();
+      handleCheckLineQuota();
     }
   }, [isAdmin]);
 
@@ -590,40 +607,154 @@ export default function AdminPage() {
             >
               {savingSettings ? "กำลังบันทึก..." : "✔ บันทึกการตั้งค่าโรงเรียน"}
             </button>
+          </div>
 
-            <button
-              type="button"
-              onClick={async () => {
-                setAlert(null);
-                try {
-                  const res = await fetch("/api/line-notify", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ eventType: "test_notify" }),
-                  });
-                  const data = await res.json().catch(() => ({}));
-                  if (!res.ok || data?.success === false) {
-                    setAlert({
-                      type: "error",
-                      text: `ส่งแจ้งเตือน LINE ไม่สำเร็จ: ${data?.error || data?.reason || "กรุณาตรวจสอบค่า LINE_CHANNEL_ACCESS_TOKEN และ LINE_GROUP_ID ใน Vercel"}`,
-                    });
-                  } else {
-                    setAlert({
-                      type: "success",
-                      text: "ส่งข้อความทดสอบเข้ากลุ่ม LINE โรงเรียนสำเร็จแล้ว!",
-                    });
-                  }
-                } catch (err: any) {
-                  setAlert({
-                    type: "error",
-                    text: err?.message || "ไม่สามารถเชื่อมต่อระบบแจ้งเตือน LINE ได้",
-                  });
-                }
-              }}
-              className="px-4 py-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs sm:text-sm font-bold transition-colors"
-            >
-              ทดสอบส่งแจ้งเตือน LINE
-            </button>
+          {/* กล่องตรวจสอบโควตาและทดสอบ LINE Messaging API */}
+          <div className="mt-6 pt-5 border-t border-slate-200/80 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">
+                  ตรวจสอบโควตาและทดสอบ LINE Messaging API
+                </h3>
+                <p className="text-xs text-slate-500">
+                  เช็คจำนวนข้อความที่ส่งไปแล้วในเดือนนี้ (Consumption), เพดานโควตา (Quota) และทดสอบส่งเข้ากลุ่ม
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={checkingQuota}
+                  onClick={handleCheckLineQuota}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {checkingQuota ? "กำลังเช็คโควตา..." : "🔍 เช็คโควตา LINE ประจำเดือน"}
+                </button>
+                <button
+                  type="button"
+                  disabled={testingLine}
+                  onClick={async () => {
+                    setAlert(null);
+                    setTestingLine(true);
+                    try {
+                      const res = await fetch("/api/line-notify", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ eventType: "test_notify" }),
+                      });
+                      const data = await res.json().catch(() => ({}));
+                      await handleCheckLineQuota();
+                      if (!res.ok || data?.success === false) {
+                        setAlert({
+                          type: "error",
+                          text: `ส่งแจ้งเตือน LINE ไม่สำเร็จ: ${data?.error || data?.reason || "กรุณาตรวจสอบค่า LINE_CHANNEL_ACCESS_TOKEN และ LINE_GROUP_ID ใน Vercel"}`,
+                        });
+                      } else {
+                        setAlert({
+                          type: "success",
+                          text: "ส่งข้อความทดสอบเข้ากลุ่ม LINE โรงเรียนสำเร็จแล้ว!",
+                        });
+                      }
+                    } catch (err: any) {
+                      setAlert({
+                        type: "error",
+                        text: err?.message || "ไม่สามารถเชื่อมต่อระบบแจ้งเตือน LINE ได้",
+                      });
+                    } finally {
+                      setTestingLine(false);
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  {testingLine ? "กำลังส่งทดสอบ..." : "🔔 ทดสอบส่งแจ้งเตือน LINE"}
+                </button>
+              </div>
+            </div>
+
+            {lineQuota && (
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 space-y-3">
+                {!lineQuota.success ? (
+                  <div className="text-xs text-rose-700 font-semibold">
+                    ⚠️ {lineQuota.error || "ยังไม่สามารถอ่านข้อมูลโควตา LINE ได้"}
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="p-3 rounded-xl bg-white border border-slate-200/80">
+                        <div className="text-[11px] text-slate-500 font-medium">
+                          1. ส่งไปแล้วเดือนนี้ (Consumption)
+                        </div>
+                        <div className="text-lg font-extrabold text-slate-800 mt-0.5">
+                          {lineQuota.totalUsage ?? 0}{" "}
+                          <span className="text-xs font-semibold text-slate-500">ข้อความ</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          GET /v2/bot/message/quota/consumption
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-white border border-slate-200/80">
+                        <div className="text-[11px] text-slate-500 font-medium">
+                          2. โควตาสูงสุดเดือนนี้ / คงเหลือ (Quota)
+                        </div>
+                        <div
+                          className={`text-lg font-extrabold mt-0.5 ${
+                            lineQuota.remaining === 0 ? "text-rose-600" : "text-emerald-700"
+                          }`}
+                        >
+                          {lineQuota.monthlyLimit !== null
+                            ? `เหลือ ${lineQuota.remaining} / ${lineQuota.monthlyLimit}`
+                            : "ไม่จำกัด"}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          GET /v2/bot/message/quota
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-white border border-slate-200/80">
+                        <div className="text-[11px] text-slate-500 font-medium">
+                          3. สมาชิกในกลุ่ม / ส่งเข้ากลุ่มได้อีก
+                        </div>
+                        <div className="text-lg font-extrabold text-indigo-800 mt-0.5">
+                          {lineQuota.groupMemberCount
+                            ? `${lineQuota.groupMemberCount} คน (ส่งได้อีก ~${lineQuota.estimatedPushesLeft ?? 0} ครั้ง)`
+                            : lineQuota.botName || "เชื่อมต่อแล้ว"}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {lineQuota.botName
+                            ? `บอท: ${lineQuota.botName} (${lineQuota.botBasicId || ""})`
+                            : "GET /v2/bot/info"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {lineQuota.monthlyLimit !== null && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[11px] font-semibold">
+                          <span className="text-slate-600">
+                            อัตราการใช้งานโควตาประจำเดือน ({lineQuota.usagePercent ?? 0}%)
+                          </span>
+                          <span className="text-slate-500">
+                            อัปเดตล่าสุด: {lineQuota.checkedAt}
+                          </span>
+                        </div>
+                        <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all rounded-full ${
+                              (lineQuota.usagePercent ?? 0) >= 100
+                                ? "bg-rose-600"
+                                : (lineQuota.usagePercent ?? 0) >= 80
+                                ? "bg-amber-500"
+                                : "bg-emerald-600"
+                            }`}
+                            style={{ width: `${Math.min(100, lineQuota.usagePercent ?? 0)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </form>
       )}
