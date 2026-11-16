@@ -345,8 +345,8 @@ export default function ReviewPage() {
       {/* Review & Interactive Stamp Modal */}
       {selectedPlan && (
         <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-slate-900/50 backdrop-blur-sm">
-          <div className="max-w-6xl w-full glass-panel rounded-3xl p-4 sm:p-6 border border-white/80 shadow-2xl space-y-4 max-h-[95vh] overflow-y-auto">
-            <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-3">
+          <div className="max-w-6xl w-full glass-panel rounded-3xl p-3.5 sm:p-5 border border-white/80 shadow-2xl flex flex-col gap-3 max-h-[95vh] lg:h-[94vh] overflow-y-auto lg:overflow-hidden">
+            <div className="shrink-0 flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-2.5">
               <div>
                 <h3 className="font-display font-bold text-base sm:text-lg text-slate-800">
                   ตรวจแผนและประทับลายเซ็น: {selectedPlan.teacher_name}
@@ -377,7 +377,7 @@ export default function ReviewPage() {
 
             {msg && (
               <div
-                className={`p-3 rounded-xl text-xs font-semibold ${
+                className={`shrink-0 p-3 rounded-xl text-xs font-semibold ${
                   msg.type === "success"
                     ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
                     : "bg-red-50 text-red-800 border border-red-200"
@@ -388,20 +388,22 @@ export default function ReviewPage() {
             )}
 
             {/* Interactive PDF Stamp & Comment Canvas */}
-            <DirectorStampCanvas
-              fileId={selectedPlan.post_file_id || selectedPlan.plan_file_id}
-              fileUrl={selectedPlan.post_file_url || selectedPlan.plan_file_url}
-              signerName={profile?.full_name || "นางสาวอำพร คงเจริญ"}
-              signerTitle="ผู้อำนวยการโรงเรียนวัดโป่งแรด(ปคุณวิทยาคาร)"
-              commentText={reviewNote}
-              onCommentChange={setReviewNote}
-              onBindExporter={(fn) => {
-                overlayExporterRef.current = fn;
-              }}
-            />
+            <div className="lg:flex-1 lg:min-h-0 flex flex-col">
+              <DirectorStampCanvas
+                fileId={selectedPlan.post_file_id || selectedPlan.plan_file_id}
+                fileUrl={selectedPlan.post_file_url || selectedPlan.plan_file_url}
+                signerName={profile?.full_name || "นางสาวอำพร คงเจริญ"}
+                signerTitle="ผู้อำนวยการโรงเรียนวัดโป่งแรด(ปคุณวิทยาคาร)"
+                commentText={reviewNote}
+                onCommentChange={setReviewNote}
+                onBindExporter={(fn) => {
+                  overlayExporterRef.current = fn;
+                }}
+              />
+            </div>
 
             {/* Options & Action Buttons */}
-            <div className="space-y-3 pt-3 border-t border-slate-200">
+            <div className="shrink-0 space-y-2.5 pt-2.5 border-t border-slate-200">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label className="inline-flex items-center gap-2 text-xs font-bold text-indigo-900 cursor-pointer">
                   <input

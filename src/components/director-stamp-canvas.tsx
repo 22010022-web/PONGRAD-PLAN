@@ -4,16 +4,21 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Eraser,
+  FileText,
   Hand,
   ImageUp,
   Loader2,
+  LocateFixed,
   Maximize2,
   Minimize2,
   Move,
   PenLine,
   PenTool,
   RotateCcw,
+  ScrollText,
   Trash2,
   Undo2,
   ZoomIn,
@@ -281,20 +286,36 @@ export function DirectorStampCanvas({
   onCommentChange,
   onBindExporter,
 }: DirectorStampCanvasProps) {
-  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const drawPadRef = useRef<HTMLCanvasElement | null>(null);
-  const basePageCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sigImageRef = useRef<HTMLImageElement | null>(null);
 
-  const [canvasHeight, setCanvasHeight] = useState(Math.round(CANVAS_W * 1.4142));
+  const defaultPageHeightRef = useRef<number>(Math.round(CANVAS_W * 1.4142));
   const pageHeightsRef = useRef<Record<number, number>>({});
+  const [pageDimsVersion, setPageDimsVersion] = useState(0);
+
+  const baseCanvasesRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
+  const renderingPagesRef = useRef<Set<number>>(new Set());
+  const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
+  const pageSlotRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const pdfLoadGenRef = useRef(0);
+
   const [pdfDocProxy, setPdfDocProxy] = useState<any>(null);
   const [totalPages, setTotalPages] = useState(1);
   const [pageNumber, setPageNumber] = useState(1);
+  const pageNumberRef = useRef(1);
+  const [pageInput, setPageInput] = useState("1");
+  const isEditingPageInputRef = useRef(false);
+
   const [sigPageNumber, setSigPageNumber] = useState(1);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // โหมดแสดงผล: "continuous" = เลื่อนเมาส์/นิ้วอ่านต่อเนื่องทุกหน้า, "single" = ทีละหน้า
+  const [viewMode, setViewMode] = useState<"continuous" | "single">("continuous");
+  const programmaticJumpUntilRef = useRef(0);
+  const pendingScrollPageRef = useRef<number | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
 
   // ระบบซูมหน้ากระดาษ (+ / -) และขยายเต็มจอสำหรับเขียนบน iPad / จอเล็ก
   const [zoomPercent, setZoomPercent] = useState(100);
@@ -308,6 +329,7 @@ export function DirectorStampCanvas({
   const [strokesByPage, setStrokesByPage] = useState<Record<number, PenStroke[]>>({});
   const strokesByPageRef = useRef<Record<number, PenStroke[]>>({});
   const activeStrokeRef = useRef<PenStroke | null>(null);
+  const activeStrokePageRef = useRef<number>(1);
   const panStartRef = useRef<{
     clientX: number;
     clientY: number;
@@ -328,7 +350,15 @@ export function DirectorStampCanvas({
 
   const [layout, setLayout] = useState<SigLayoutState>(DEFAULT_SIG_LAYOUT);
   const layoutRef = useRef<SigLayoutState>(DEFAULT_SIG_LAYOUT);
-  const dragSigRef = useRef<{ dx: number; dy: number } | null>(null);
+  const dragSigRef = useRef<{ page: number; dx: number; dy: number } | null>(null);
+
+  const getPageHeightPx = useCallback((pNum: number) => {
+    return pageHeightsRef.current[pNum] || defaultPageHeightRef.current;
+  }, []);
+
+  useEffect(() => {
+    pageNumberRef.current = pageNumber;
+  }, [pageNumber]);
 
   useEffect(() => {
     layoutRef.current = layout;
@@ -352,117 +382,6 @@ export function DirectorStampCanvas({
     }
   }, []);
 
-  useEffect(() => {
-    if (!sigDataUrl) {
-      sigImageRef.current = null;
-      renderPreview();
-      return;
-    }
-    const img = new Image();
-    img.onload = () => {
-      sigImageRef.current = img;
-      renderPreview();
-    };
-    img.src = sigDataUrl;
-  }, [sigDataUrl]);
-
-  useEffect(() => {
-    if (typeof document !== "undefined" && document.fonts) {
-      Promise.all([
-        document.fonts.load("400 22px Sarabun", "กขค"),
-        document.fonts.load("600 22px Sarabun", "กขค"),
-      ])
-        .then(() => renderPreview())
-        .catch(() => {});
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    let loadedTask: any = null;
-
-    async function loadPdf() {
-      const resolvedId = fileId?.trim() || extractDriveFileId(fileUrl);
-      if (!resolvedId) {
-        setPdfError("ไม่พบรหัสไฟล์บน Google Drive");
-        return;
-      }
-
-      setLoadingPdf(true);
-      setPdfError(null);
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session?.access_token) throw new Error("เซสชันหมดอายุ");
-
-        const res = await fetch(`/api/drive/file/${resolvedId}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || `โหลดไฟล์ PDF ไม่สำเร็จ (HTTP ${res.status})`);
-        }
-
-        const buf = await res.arrayBuffer();
-        const pdfjsLib = await loadPdfJsClient();
-        loadedTask = pdfjsLib.getDocument({ data: new Uint8Array(buf) });
-        const pdf = await loadedTask.promise;
-        if (cancelled) return;
-
-        setPdfDocProxy(pdf);
-        setTotalPages(pdf.numPages);
-        setPageNumber(1);
-        setSigPageNumber(pdf.numPages);
-      } catch (err: any) {
-        if (!cancelled) {
-          setPdfError(err?.message || "ไม่สามารถโหลดตัวอย่างหน้ากระดาษ PDF ได้");
-        }
-      } finally {
-        if (!cancelled) setLoadingPdf(false);
-      }
-    }
-
-    loadPdf();
-    return () => {
-      cancelled = true;
-      if (loadedTask?.destroy) {
-        loadedTask.destroy().catch(() => {});
-      }
-    };
-  }, [fileId, fileUrl]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function renderPdfPage() {
-      if (!pdfDocProxy) return;
-      try {
-        const page = await pdfDocProxy.getPage(pageNumber);
-        const vp0 = page.getViewport({ scale: 1 });
-        const scale = CANVAS_W / Math.max(1, vp0.width);
-        const vp = page.getViewport({ scale });
-        const h = Math.round(vp.height);
-        pageHeightsRef.current[pageNumber] = h;
-
-        const off = document.createElement("canvas");
-        off.width = CANVAS_W;
-        off.height = h;
-        await page.render({ canvas: off, viewport: vp, background: "#ffffff" }).promise;
-        if (cancelled) return;
-
-        basePageCanvasRef.current = off;
-        setCanvasHeight(h);
-        renderPreview(h);
-      } catch (err) {
-        console.warn("Render PDF page error:", err);
-      }
-    }
-    renderPdfPage();
-    return () => {
-      cancelled = true;
-    };
-  }, [pdfDocProxy, pageNumber]);
-
   const drawPageOverlay = useCallback(
     (ctx: CanvasRenderingContext2D, targetPage: number, showGuides: boolean) => {
       const k = MM_TO_PX;
@@ -471,7 +390,7 @@ export function DirectorStampCanvas({
       // 1. วาดเส้นปากกาตามน้ำหนักกด (Pressure-Sensitive Handwriting)
       const pageStrokes = strokesByPageRef.current[targetPage] || [];
       const allStrokes =
-        targetPage === pageNumber && activeStrokeRef.current
+        targetPage === activeStrokePageRef.current && activeStrokeRef.current
           ? [...pageStrokes, activeStrokeRef.current]
           : pageStrokes;
 
@@ -545,14 +464,15 @@ export function DirectorStampCanvas({
 
       ctx.restore();
     },
-    [pageNumber, sigPageNumber, signDateIso, signerName, signerTitle, toolMode]
+    [sigPageNumber, signDateIso, signerName, signerTitle, toolMode]
   );
 
-  const renderPreview = useCallback(
-    (overrideH?: number) => {
-      const cv = previewCanvasRef.current;
+  const redrawPageCanvas = useCallback(
+    (pNum: number) => {
+      const cv = canvasRefs.current[pNum];
       if (!cv) return;
-      const h = overrideH || canvasHeight;
+      const h = getPageHeightPx(pNum);
+      if (cv.width !== CANVAS_W) cv.width = CANVAS_W;
       if (cv.height !== h) cv.height = h;
       const ctx = cv.getContext("2d");
       if (!ctx) return;
@@ -560,18 +480,352 @@ export function DirectorStampCanvas({
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, CANVAS_W, h);
 
-      if (basePageCanvasRef.current) {
-        ctx.drawImage(basePageCanvasRef.current, 0, 0, CANVAS_W, h);
+      const baseCv = baseCanvasesRef.current.get(pNum);
+      if (baseCv) {
+        baseCanvasesRef.current.delete(pNum);
+        baseCanvasesRef.current.set(pNum, baseCv);
+        ctx.drawImage(baseCv, 0, 0, CANVAS_W, h);
       }
 
-      drawPageOverlay(ctx, pageNumber, true);
+      drawPageOverlay(ctx, pNum, true);
     },
-    [canvasHeight, drawPageOverlay, pageNumber]
+    [drawPageOverlay, getPageHeightPx]
+  );
+
+  const redrawAllVisibleCanvases = useCallback(() => {
+    for (const key of Object.keys(canvasRefs.current)) {
+      const pNum = Number(key);
+      if (canvasRefs.current[pNum]) {
+        redrawPageCanvas(pNum);
+      }
+    }
+  }, [redrawPageCanvas]);
+
+  useEffect(() => {
+    if (!sigDataUrl) {
+      sigImageRef.current = null;
+      redrawAllVisibleCanvases();
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      sigImageRef.current = img;
+      redrawAllVisibleCanvases();
+    };
+    img.src = sigDataUrl;
+  }, [sigDataUrl, redrawAllVisibleCanvases]);
+
+  useEffect(() => {
+    if (typeof document !== "undefined" && document.fonts) {
+      Promise.all([
+        document.fonts.load("400 22px Sarabun", "กขค"),
+        document.fonts.load("600 22px Sarabun", "กขค"),
+      ])
+        .then(() => redrawAllVisibleCanvases())
+        .catch(() => {});
+    }
+  }, [redrawAllVisibleCanvases]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let loadedTask: any = null;
+    const gen = ++pdfLoadGenRef.current;
+
+    const clearCachedCanvases = () => {
+      baseCanvasesRef.current.forEach((cv) => {
+        cv.width = 0;
+        cv.height = 0;
+      });
+      baseCanvasesRef.current.clear();
+      renderingPagesRef.current.clear();
+    };
+
+    async function loadPdf() {
+      const resolvedId = fileId?.trim() || extractDriveFileId(fileUrl);
+      if (!resolvedId) {
+        setPdfError("ไม่พบรหัสไฟล์บน Google Drive");
+        return;
+      }
+
+      clearCachedCanvases();
+      pageHeightsRef.current = {};
+      canvasRefs.current = {};
+      pageSlotRefs.current = {};
+      setLoadingPdf(true);
+      setPdfError(null);
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) throw new Error("เซสชันหมดอายุ");
+
+        const res = await fetch(`/api/drive/file/${resolvedId}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `โหลดไฟล์ PDF ไม่สำเร็จ (HTTP ${res.status})`);
+        }
+
+        const buf = await res.arrayBuffer();
+        const pdfjsLib = await loadPdfJsClient();
+        loadedTask = pdfjsLib.getDocument({ data: new Uint8Array(buf) });
+        const pdf = await loadedTask.promise;
+        if (cancelled || gen !== pdfLoadGenRef.current) return;
+
+        // วัดอัตราส่วนหน้าแรกและหน้าสุดท้ายล่วงหน้า เพื่อให้โครงหน้าต่อเนื่องและขนาด export แม่นยำทันที
+        try {
+          const p1 = await pdf.getPage(1);
+          const vp1 = p1.getViewport({ scale: 1 });
+          const h1 = Math.round(vp1.height * (CANVAS_W / Math.max(1, vp1.width)));
+          defaultPageHeightRef.current = h1;
+          pageHeightsRef.current[1] = h1;
+
+          if (pdf.numPages > 1) {
+            const pLast = await pdf.getPage(pdf.numPages);
+            const vpLast = pLast.getViewport({ scale: 1 });
+            pageHeightsRef.current[pdf.numPages] = Math.round(
+              vpLast.height * (CANVAS_W / Math.max(1, vpLast.width))
+            );
+          }
+        } catch {
+          // fallback to default A4 aspect ratio
+        }
+
+        if (cancelled || gen !== pdfLoadGenRef.current) return;
+        setPdfDocProxy(pdf);
+        setTotalPages(pdf.numPages);
+        setPageNumber(1);
+        pageNumberRef.current = 1;
+        setPageInput("1");
+        setSigPageNumber(pdf.numPages);
+        setPageDimsVersion((v) => v + 1);
+      } catch (err: any) {
+        if (!cancelled) {
+          setPdfError(err?.message || "ไม่สามารถโหลดตัวอย่างหน้ากระดาษ PDF ได้");
+        }
+      } finally {
+        if (!cancelled) setLoadingPdf(false);
+      }
+    }
+
+    loadPdf();
+    return () => {
+      cancelled = true;
+      pdfLoadGenRef.current += 1;
+      clearCachedCanvases();
+      if (loadedTask?.destroy) {
+        loadedTask.destroy().catch(() => {});
+      }
+    };
+  }, [fileId, fileUrl]);
+
+  const ensurePageBaseRendered = useCallback(
+    async (pNum: number) => {
+      if (!pdfDocProxy || pNum < 1 || pNum > totalPages) return;
+      if (baseCanvasesRef.current.has(pNum)) {
+        redrawPageCanvas(pNum);
+        return;
+      }
+      if (renderingPagesRef.current.has(pNum)) return;
+
+      renderingPagesRef.current.add(pNum);
+      const gen = pdfLoadGenRef.current;
+      try {
+        const page = await pdfDocProxy.getPage(pNum);
+        if (gen !== pdfLoadGenRef.current) return;
+
+        const vp0 = page.getViewport({ scale: 1 });
+        const scale = CANVAS_W / Math.max(1, vp0.width);
+        const vp = page.getViewport({ scale });
+        const h = Math.round(vp.height);
+
+        if (pageHeightsRef.current[pNum] !== h) {
+          pageHeightsRef.current[pNum] = h;
+          setPageDimsVersion((v) => v + 1);
+        }
+
+        const off = document.createElement("canvas");
+        off.width = CANVAS_W;
+        off.height = h;
+        await page.render({ canvas: off, viewport: vp, background: "#ffffff" }).promise;
+        if (gen !== pdfLoadGenRef.current) {
+          off.width = 0;
+          off.height = 0;
+          return;
+        }
+
+        // จำกัดแคชหน้า PDF ล่าสุดไว้ไม่เกิน 12 หน้า เพื่อป้องกันหน่วยความจำเต็มบน iPad เมื่อเปิดแผนหลายสิบหน้า
+        baseCanvasesRef.current.set(pNum, off);
+        while (baseCanvasesRef.current.size > 12) {
+          const oldestKey = baseCanvasesRef.current.keys().next().value;
+          if (oldestKey === undefined) break;
+          const oldestCanvas = baseCanvasesRef.current.get(oldestKey);
+          baseCanvasesRef.current.delete(oldestKey);
+          if (oldestCanvas) {
+            oldestCanvas.width = 0;
+            oldestCanvas.height = 0;
+          }
+        }
+
+        redrawPageCanvas(pNum);
+      } catch (err) {
+        console.warn(`Render PDF page ${pNum} error:`, err);
+      } finally {
+        renderingPagesRef.current.delete(pNum);
+      }
+    },
+    [pdfDocProxy, redrawPageCanvas, totalPages]
   );
 
   useEffect(() => {
-    renderPreview();
-  }, [layout, strokesByPage, sigPageNumber, signDateIso, toolMode, renderPreview]);
+    if (!pdfDocProxy || loadingPdf) return;
+    let cancelled = false;
+
+    const targetPages: number[] =
+      viewMode === "single"
+        ? [pageNumber]
+        : [
+            pageNumber,
+            pageNumber + 1,
+            pageNumber - 1,
+            pageNumber + 2,
+            pageNumber - 2,
+            pageNumber + 3,
+            pageNumber - 3,
+          ].filter((p) => p >= 1 && p <= totalPages);
+
+    async function renderWindow() {
+      for (const p of targetPages) {
+        if (cancelled) return;
+        await ensurePageBaseRendered(p);
+      }
+    }
+
+    renderWindow();
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfDocProxy, pageNumber, viewMode, totalPages, loadingPdf, ensurePageBaseRendered]);
+
+  useEffect(() => {
+    redrawAllVisibleCanvases();
+  }, [
+    layout,
+    strokesByPage,
+    sigPageNumber,
+    signDateIso,
+    toolMode,
+    viewMode,
+    pageDimsVersion,
+    redrawAllVisibleCanvases,
+  ]);
+
+  const scrollSlotIntoView = useCallback((targetPage: number) => {
+    const container = scrollContainerRef.current;
+    const slot = pageSlotRefs.current[targetPage];
+    if (!container || !slot) return;
+    const containerRect = container.getBoundingClientRect();
+    const slotRect = slot.getBoundingClientRect();
+    container.scrollTop += slotRect.top - containerRect.top - 8;
+  }, []);
+
+  const goToPage = useCallback(
+    (rawTarget: number) => {
+      if (loadingPdf) return;
+      const numeric = Number(rawTarget);
+      const clamped = Math.max(
+        1,
+        Math.min(totalPages, Number.isFinite(numeric) ? Math.round(numeric) : 1)
+      );
+      programmaticJumpUntilRef.current = Date.now() + 450;
+      setPageNumber(clamped);
+      pageNumberRef.current = clamped;
+      setPageInput(String(clamped));
+      if (viewMode === "continuous") {
+        requestAnimationFrame(() => scrollSlotIntoView(clamped));
+      } else if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = 0;
+      }
+    },
+    [loadingPdf, scrollSlotIntoView, totalPages, viewMode]
+  );
+
+  const commitPageInput = useCallback(() => {
+    const parsed = parseInt(pageInput, 10);
+    if (Number.isNaN(parsed)) {
+      setPageInput(String(pageNumberRef.current));
+      return;
+    }
+    goToPage(parsed);
+  }, [goToPage, pageInput]);
+
+  const handleContainerScroll = useCallback(() => {
+    if (viewMode !== "continuous" || loadingPdf || totalPages <= 1) return;
+    if (Date.now() < programmaticJumpUntilRef.current) return;
+    if (scrollRafRef.current !== null) return;
+
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const container = scrollContainerRef.current;
+      if (!container) return;
+
+      let detectedPage = pageNumberRef.current;
+      if (container.scrollTop <= 12) {
+        detectedPage = 1;
+      } else if (
+        container.scrollTop + container.clientHeight >= container.scrollHeight - 12 &&
+        container.scrollTop > 20
+      ) {
+        detectedPage = totalPages;
+      } else {
+        const containerRect = container.getBoundingClientRect();
+        const focusY = containerRect.top + containerRect.height * 0.35;
+        let bestDist = Infinity;
+
+        for (let p = 1; p <= totalPages; p++) {
+          const el = pageSlotRefs.current[p];
+          if (!el) continue;
+          const r = el.getBoundingClientRect();
+          if (r.top <= focusY && r.bottom >= focusY) {
+            detectedPage = p;
+            bestDist = 0;
+            break;
+          }
+          const dist = focusY < r.top ? r.top - focusY : focusY - r.bottom;
+          if (dist < bestDist) {
+            bestDist = dist;
+            detectedPage = p;
+          }
+        }
+      }
+
+      if (detectedPage !== pageNumberRef.current) {
+        setPageNumber(detectedPage);
+        pageNumberRef.current = detectedPage;
+        if (!isEditingPageInputRef.current) {
+          setPageInput(String(detectedPage));
+        }
+      }
+    });
+  }, [loadingPdf, totalPages, viewMode]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (viewMode !== "continuous") return;
+    const target = pendingScrollPageRef.current;
+    if (!target) return;
+    pendingScrollPageRef.current = null;
+    programmaticJumpUntilRef.current = Date.now() + 450;
+    requestAnimationFrame(() => scrollSlotIntoView(target));
+  }, [zoomPercent, viewMode, isFullscreenWorkspace, scrollSlotIntoView]);
 
   useEffect(() => {
     const exporter = (): DirectorOverlayExport | null => {
@@ -592,7 +846,7 @@ export function DirectorStampCanvas({
 
       const overlays: { pageNumber: number; overlayPngDataUrl: string }[] = [];
       for (const pNum of Array.from(pagesToExport).sort((a, b) => a - b)) {
-        const h = pageHeightsRef.current[pNum] || canvasHeight;
+        const h = getPageHeightPx(pNum);
         const off = document.createElement("canvas");
         off.width = CANVAS_W;
         off.height = h;
@@ -614,7 +868,7 @@ export function DirectorStampCanvas({
 
     onBindExporter(exporter);
     return () => onBindExporter(null);
-  }, [canvasHeight, drawPageOverlay, onBindExporter, sigPageNumber]);
+  }, [drawPageOverlay, getPageHeightPx, onBindExporter, sigPageNumber]);
 
   const saveLayoutToStorage = (next: SigLayoutState) => {
     try {
@@ -624,17 +878,24 @@ export function DirectorStampCanvas({
     }
   };
 
-  const clientCoordsToMm = (clientX: number, clientY: number): [number, number] => {
-    const cv = previewCanvasRef.current!;
+  const clientCoordsToMm = (
+    clientX: number,
+    clientY: number,
+    targetPage: number
+  ): [number, number] => {
+    const cv = canvasRefs.current[targetPage];
+    if (!cv) return [0, 0];
     const rect = cv.getBoundingClientRect();
+    const pageH = getPageHeightPx(targetPage);
     const xMm = ((clientX - rect.left) / Math.max(1, rect.width)) * 210;
-    const yMm =
-      ((clientY - rect.top) / Math.max(1, rect.height)) * (canvasHeight / MM_TO_PX);
+    const yMm = ((clientY - rect.top) / Math.max(1, rect.height)) * (pageH / MM_TO_PX);
     return [xMm, yMm];
   };
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // หากใช้ Apple Pencil แตะหน้าจอ ให้ตรวจจับและเปิดโหมดแยกนิ้วเลื่อนให้อัตโนมัติได้ หรือสลับมาเขียนได้ทันที
+  const handlePointerDown = (
+    e: React.PointerEvent<HTMLCanvasElement>,
+    targetPage: number
+  ) => {
     const isStylus = e.pointerType === "pen";
     const isFingerTouch = e.pointerType === "touch";
 
@@ -652,13 +913,14 @@ export function DirectorStampCanvas({
       return;
     }
 
-    const [x, y] = clientCoordsToMm(e.clientX, e.clientY);
+    const [x, y] = clientCoordsToMm(e.clientX, e.clientY, targetPage);
 
     if (toolMode === "pen" || isStylus) {
       if (isStylus && toolMode !== "pen") {
         setToolMode("pen");
       }
       e.currentTarget.setPointerCapture(e.pointerId);
+      activeStrokePageRef.current = targetPage;
       const now = performance.now();
       const p = computePointPressure(e.pointerType, e.pressure, undefined, x, y, now);
       activeStrokeRef.current = {
@@ -666,35 +928,35 @@ export function DirectorStampCanvas({
         baseWidthMm: penBaseWidthMm,
         points: [{ xMm: x, yMm: y, p, t: now }],
       };
-      renderPreview();
+      redrawPageCanvas(targetPage);
       return;
     }
 
     const cur = layoutRef.current;
-    if (!cur.showSignatureOnDoc) return;
-
     const inSigBox =
-      pageNumber === sigPageNumber &&
-      x >= cur.x - 4 &&
-      x <= cur.x + cur.w + 4 &&
-      y >= cur.y - 4 &&
-      y <= cur.y + cur.h + 4;
+      cur.showSignatureOnDoc &&
+      targetPage === sigPageNumber &&
+      x >= cur.x - 6 &&
+      x <= cur.x + cur.w + 6 &&
+      y >= cur.y - 6 &&
+      y <= cur.y + cur.h + 6;
 
     if (inSigBox) {
-      dragSigRef.current = { dx: x - cur.x, dy: y - cur.y };
+      dragSigRef.current = { page: targetPage, dx: x - cur.x, dy: y - cur.y };
       e.currentTarget.setPointerCapture(e.pointerId);
-    } else if (pageNumber !== sigPageNumber) {
-      setSigPageNumber(pageNumber);
-      const next = {
-        ...cur,
-        x: Math.max(5, Math.min(180, x - cur.w / 2)),
-        y: Math.max(5, Math.min(275, y - 5)),
-      };
-      setLayout(next);
-      layoutRef.current = next;
-      dragSigRef.current = { dx: cur.w / 2, dy: 5 };
-      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
     }
+
+    // นอกกรอบลายเซ็น: ให้ลาก/แตะเลื่อนกระดาษได้โดยไม่เผลอย้ายลายเซ็นข้ามหน้าโดยไม่ตั้งใจ
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    panStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      scrollLeft: container.scrollLeft,
+      scrollTop: container.scrollTop,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -710,6 +972,7 @@ export function DirectorStampCanvas({
     }
 
     if (activeStrokeRef.current) {
+      const targetPage = activeStrokePageRef.current;
       const stroke = activeStrokeRef.current;
       const coalesced: PointerEvent[] =
         typeof (e.nativeEvent as any).getCoalescedEvents === "function"
@@ -717,7 +980,7 @@ export function DirectorStampCanvas({
           : [e.nativeEvent];
 
       for (const ev of coalesced) {
-        const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY);
+        const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY, targetPage);
         const lastPt = stroke.points[stroke.points.length - 1];
         if (lastPt && Math.hypot(cx - lastPt.xMm, cy - lastPt.yMm) < 0.08) {
           continue;
@@ -734,13 +997,13 @@ export function DirectorStampCanvas({
         stroke.points.push({ xMm: cx, yMm: cy, p, t: now });
       }
 
-      renderPreview();
+      redrawPageCanvas(targetPage);
       return;
     }
 
     if (!dragSigRef.current) return;
-    const [x, y] = clientCoordsToMm(e.clientX, e.clientY);
-    const { dx, dy } = dragSigRef.current;
+    const { page: sigTargetPage, dx, dy } = dragSigRef.current;
+    const [x, y] = clientCoordsToMm(e.clientX, e.clientY, sigTargetPage);
     const nextX = Math.max(2, Math.min(195, x - dx));
     const nextY = Math.max(2, Math.min(285, y - dy));
 
@@ -759,13 +1022,21 @@ export function DirectorStampCanvas({
 
     if (activeStrokeRef.current) {
       const finished = activeStrokeRef.current;
+      const targetPage = activeStrokePageRef.current;
       activeStrokeRef.current = null;
       setStrokesByPage((prev) => {
-        const list = prev[pageNumber] || [];
-        const next = { ...prev, [pageNumber]: [...list, finished] };
+        const list = prev[targetPage] || [];
+        const next = { ...prev, [targetPage]: [...list, finished] };
         strokesByPageRef.current = next;
         return next;
       });
+      if (targetPage !== pageNumberRef.current) {
+        setPageNumber(targetPage);
+        pageNumberRef.current = targetPage;
+        if (!isEditingPageInputRef.current) {
+          setPageInput(String(targetPage));
+        }
+      }
       return;
     }
 
@@ -888,16 +1159,101 @@ export function DirectorStampCanvas({
   const baseDisplayWidth = isFullscreenWorkspace ? 760 : 540;
   const zoomedWidthPx = Math.round((baseDisplayWidth * zoomPercent) / 100);
 
+  const changeZoom = (computeNext: (cur: number) => number) => {
+    pendingScrollPageRef.current = pageNumberRef.current;
+    setZoomPercent((cur) => Math.max(100, Math.min(325, computeNext(cur))));
+  };
+
+  const switchViewMode = (nextMode: "continuous" | "single") => {
+    if (nextMode === viewMode) return;
+    pendingScrollPageRef.current = pageNumberRef.current;
+    setViewMode(nextMode);
+  };
+
+  const toggleFullscreen = () => {
+    pendingScrollPageRef.current = pageNumberRef.current;
+    setIsFullscreenWorkspace((v) => !v);
+  };
+
+  const pageListToRender =
+    viewMode === "single"
+      ? [pageNumber]
+      : Array.from({ length: totalPages }, (_, idx) => idx + 1);
+
+  const renderPageSlot = (pNum: number) => {
+    const pageH = getPageHeightPx(pNum);
+    const shouldMountCanvas =
+      viewMode === "single"
+        ? pNum === pageNumber
+        : Math.abs(pNum - pageNumber) <= 3;
+
+    return (
+      <div
+        key={pNum}
+        ref={(el) => {
+          pageSlotRefs.current[pNum] = el;
+        }}
+        data-page-number={pNum}
+        className="flex flex-col items-center max-w-full"
+        style={{
+          width: `${zoomedWidthPx}px`,
+          maxWidth: zoomPercent === 100 ? "100%" : "none",
+        }}
+      >
+        {viewMode === "continuous" && totalPages > 1 && (
+          <div className="w-full flex items-center justify-between px-1.5 pb-1 text-[11px] font-semibold text-slate-600">
+            <span>
+              หน้า {pNum} / {totalPages}
+            </span>
+            {layout.showSignatureOnDoc && pNum === sigPageNumber && (
+              <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-bold">
+                หน้าลายเซ็น ผอ.
+              </span>
+            )}
+          </div>
+        )}
+
+        <div
+          className="w-full bg-white shadow-lg rounded-lg border border-slate-300 overflow-hidden"
+          style={{ aspectRatio: `${CANVAS_W} / ${pageH}` }}
+        >
+          {shouldMountCanvas ? (
+            <canvas
+              ref={(el) => {
+                canvasRefs.current[pNum] = el;
+              }}
+              width={CANVAS_W}
+              height={pageH}
+              onPointerDown={(e) => handlePointerDown(e, pNum)}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+              className={`w-full h-full block touch-none select-none ${
+                toolMode === "pen"
+                  ? "cursor-crosshair"
+                  : "cursor-grab active:cursor-grabbing"
+              }`}
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center bg-white/95 text-slate-400 text-xs font-medium select-none">
+              หน้า {pNum} / {totalPages}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div
       className={
         isFullscreenWorkspace
-          ? "fixed inset-2 z-[55] bg-slate-100 rounded-3xl p-4 shadow-2xl border border-slate-300 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 gap-4 items-start"
-          : "grid grid-cols-1 lg:grid-cols-12 gap-4 items-start"
+          ? "fixed inset-2 z-[55] bg-slate-100 rounded-3xl p-3 sm:p-4 shadow-2xl border border-slate-300 grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch overflow-y-auto lg:overflow-hidden"
+          : "grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch lg:flex-1 lg:min-h-0"
       }
     >
       {/* ฝั่งซ้าย: โหมดเขียนแก้ไขด้วยปากกา iPad & ลายเซ็น ผอ. */}
-      <div className="lg:col-span-5 space-y-3 bg-slate-50/90 p-4 rounded-2xl border border-slate-200">
+      <div className="lg:col-span-5 space-y-2.5 bg-slate-50/90 p-3 sm:p-3.5 rounded-2xl border border-slate-200 lg:h-full lg:overflow-y-auto">
         {/* สลับโหมดการทำงานบนกระดาษ */}
         <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2.5">
           <div className="text-xs font-bold text-slate-700">
@@ -907,7 +1263,7 @@ export function DirectorStampCanvas({
             <button
               type="button"
               onClick={() => setToolMode("move-sig")}
-              className={`py-2.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
+              className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
                 toolMode === "move-sig"
                   ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
                   : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -919,7 +1275,7 @@ export function DirectorStampCanvas({
             <button
               type="button"
               onClick={() => setToolMode("pen")}
-              className={`py-2.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
+              className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
                 toolMode === "pen"
                   ? "bg-rose-600 text-white border-rose-600 shadow-xs"
                   : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -931,7 +1287,7 @@ export function DirectorStampCanvas({
             <button
               type="button"
               onClick={() => setToolMode("pan")}
-              className={`py-2.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
+              className={`py-2 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1 border transition-all ${
                 toolMode === "pan"
                   ? "bg-amber-600 text-white border-amber-600 shadow-xs"
                   : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -1028,8 +1384,8 @@ export function DirectorStampCanvas({
         </div>
 
         {/* ลายเซ็น ผอ. */}
-        <div className="p-3.5 rounded-xl bg-white border border-slate-200/80 space-y-2.5">
-          <div className="flex items-center justify-between">
+        <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <label className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
               <input
                 type="checkbox"
@@ -1070,7 +1426,7 @@ export function DirectorStampCanvas({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <label className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-bold cursor-pointer">
+            <label className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-bold cursor-pointer">
               <ImageUp className="w-3.5 h-3.5" />
               <span>อัปโหลดรูปลายเซ็น (PNG/JPG)</span>
               <input
@@ -1087,7 +1443,7 @@ export function DirectorStampCanvas({
                 activeSigPadStrokeRef.current = null;
                 setShowDrawModal(true);
               }}
-              className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-800 border border-pink-200 text-xs font-bold"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-800 border border-pink-200 text-xs font-bold"
             >
               <PenTool className="w-3.5 h-3.5" />
               <span>วาดลายเซ็น</span>
@@ -1181,98 +1537,209 @@ export function DirectorStampCanvas({
             onChange={(e) => onCommentChange(e.target.value)}
             rows={2}
             placeholder="พิมพ์ข้อเสนอแนะหรือจุดที่ให้แก้ไข (จะส่งแจ้งเตือนใน LINE ให้ครูทราบ)..."
-            className="w-full p-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full p-2 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
       </div>
 
-      {/* ฝั่งขวา: ตัวอย่างหน้ากระดาษ PDF จริง พร้อมระบบซูม +/- และขยายเต็มจอ */}
-      <div className="lg:col-span-7 flex flex-col items-center space-y-2 bg-slate-200/80 p-3 sm:p-4 rounded-2xl border border-slate-300">
-        {/* แถบเลือกหน้า + แถบซูมกระดาษ (+/-) */}
-        <div className="w-full flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-2 rounded-xl shadow-xs">
-          {/* เลือกหน้า */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={pageNumber <= 1 || loadingPdf}
-              onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
-              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
-              title="หน้าก่อนหน้า"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="text-xs font-bold text-slate-700 px-2">
-              หน้า {pageNumber} / {totalPages}
-            </span>
-            <button
-              type="button"
-              disabled={pageNumber >= totalPages || loadingPdf}
-              onClick={() => setPageNumber((p) => Math.min(totalPages, p + 1))}
-              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
-              title="หน้าถัดไป"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* ปุ่มซูม - / + และขนาดด่วน */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={zoomPercent <= 100}
-              onClick={() => setZoomPercent((z) => Math.max(100, z - 25))}
-              className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 disabled:opacity-40"
-              title="ซูมออก (-)"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-            {[100, 150, 200, 250].map((preset) => (
+      {/* ฝั่งขวา: ตัวอย่างหน้ากระดาษ PDF จริง พร้อมเลื่อนเมาส์อ่านต่อเนื่อง พิมพ์เลขหน้ากระโดด และซูม */}
+      <div className="lg:col-span-7 flex flex-col items-center space-y-2 bg-slate-200/80 p-2.5 sm:p-3 rounded-2xl border border-slate-300 lg:h-full lg:min-h-0">
+        {/* แถบเครื่องมือด้านบน: พิมพ์เลขหน้า + โหมดอ่านต่อเนื่อง/ทีละหน้า + ซูม */}
+        <div className="shrink-0 w-full bg-white px-2.5 sm:px-3 py-2 rounded-xl shadow-xs space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {/* ควบคุมหน้าและพิมพ์เลขหน้ากระโดดทันที */}
+            <div className="flex items-center gap-1">
               <button
-                key={preset}
                 type="button"
-                onClick={() => setZoomPercent(preset)}
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
-                  zoomPercent === preset
-                    ? "bg-indigo-600 text-white border-indigo-600"
-                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
-                }`}
+                disabled={pageNumber <= 1 || loadingPdf}
+                onClick={() => goToPage(1)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+                title="หน้าแรก (1)"
               >
-                {preset}%
+                <ChevronsLeft className="w-3.5 h-3.5" />
               </button>
-            ))}
-            <button
-              type="button"
-              disabled={zoomPercent >= 325}
-              onClick={() => setZoomPercent((z) => Math.min(325, z + 25))}
-              className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 disabled:opacity-40"
-              title="ซูมเข้า (+)"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
+              <button
+                type="button"
+                disabled={pageNumber <= 1 || loadingPdf}
+                onClick={() => goToPage(pageNumber - 1)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+                title="หน้าก่อนหน้า"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setIsFullscreenWorkspace((v) => !v)}
-              className={`ml-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border inline-flex items-center gap-1 ${
-                isFullscreenWorkspace
-                  ? "bg-amber-600 text-white border-amber-600"
-                  : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-              }`}
-              title="ขยายพื้นที่เขียนให้ใหญ่เต็มจอ"
-            >
-              {isFullscreenWorkspace ? (
-                <>
-                  <Minimize2 className="w-3.5 h-3.5" />
-                  <span>ย่อกลับ</span>
-                </>
-              ) : (
-                <>
-                  <Maximize2 className="w-3.5 h-3.5" />
-                  <span>ขยายจอ</span>
-                </>
-              )}
-            </button>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  isEditingPageInputRef.current = false;
+                  commitPageInput();
+                  (document.activeElement as HTMLElement | null)?.blur?.();
+                }}
+                className="flex items-center gap-1 text-xs font-bold text-slate-700 px-1"
+              >
+                <span>หน้า</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  aria-label="พิมพ์เลขหน้าเพื่อไปยังหน้านั้น"
+                  value={pageInput}
+                  onFocus={(e) => {
+                    isEditingPageInputRef.current = true;
+                    e.currentTarget.select();
+                  }}
+                  onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ""))}
+                  onBlur={() => {
+                    isEditingPageInputRef.current = false;
+                    commitPageInput();
+                  }}
+                  disabled={loadingPdf || totalPages <= 1}
+                  title="พิมพ์เลขหน้าแล้วกด Enter เพื่อข้ามไปหน้านั้นทันที"
+                  className="w-11 px-1 py-0.5 text-center rounded-md border border-indigo-200 bg-indigo-50/40 text-indigo-700 font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-500"
+                />
+                <span className="text-slate-500">/ {totalPages}</span>
+              </form>
+
+              <button
+                type="button"
+                disabled={pageNumber >= totalPages || loadingPdf}
+                onClick={() => goToPage(pageNumber + 1)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+                title="หน้าถัดไป"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                disabled={pageNumber >= totalPages || loadingPdf}
+                onClick={() => goToPage(totalPages)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40"
+                title={`หน้าสุดท้าย (${totalPages})`}
+              >
+                <ChevronsRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* สลับมุมมอง + ปุ่มซูม - / + */}
+            <div className="flex flex-wrap items-center gap-1">
+              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 mr-1">
+                <button
+                  type="button"
+                  onClick={() => switchViewMode("continuous")}
+                  className={`px-2 py-1 rounded-md text-[11px] font-bold inline-flex items-center gap-1 transition-colors ${
+                    viewMode === "continuous"
+                      ? "bg-indigo-600 text-white shadow-xs"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                  title="เลื่อนลูกกลิ้งเมาส์หรือปัดนิ้วอ่านต่อเนื่องทุกหน้า"
+                >
+                  <ScrollText className="w-3 h-3" />
+                  <span>ต่อเนื่อง</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchViewMode("single")}
+                  className={`px-2 py-1 rounded-md text-[11px] font-bold inline-flex items-center gap-1 transition-colors ${
+                    viewMode === "single"
+                      ? "bg-indigo-600 text-white shadow-xs"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                  title="แสดงทีละ 1 หน้า (เหมาะสำหรับซูมเขียนเฉพาะหน้า)"
+                >
+                  <FileText className="w-3 h-3" />
+                  <span>ทีละหน้า</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                disabled={zoomPercent <= 100}
+                onClick={() => changeZoom((z) => z - 25)}
+                className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 disabled:opacity-40"
+                title="ซูมออก (-)"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              {[100, 150, 200, 250].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => changeZoom(() => preset)}
+                  className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                    zoomPercent === preset
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  {preset}%
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={zoomPercent >= 325}
+                onClick={() => changeZoom((z) => z + 25)}
+                className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 disabled:opacity-40"
+                title="ซูมเข้า (+)"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className={`ml-0.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border inline-flex items-center gap-1 ${
+                  isFullscreenWorkspace
+                    ? "bg-amber-600 text-white border-amber-600"
+                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                }`}
+                title="ขยายพื้นที่เขียนให้ใหญ่เต็มจอ"
+              >
+                {isFullscreenWorkspace ? (
+                  <>
+                    <Minimize2 className="w-3.5 h-3.5" />
+                    <span>ย่อกลับ</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-3.5 h-3.5" />
+                    <span>ขยายจอ</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
+
+          {/* แถบเลื่อนข้ามหน้าด่วน & ปุ่มกระโดดไปหน้าลายเซ็น */}
+          {(totalPages > 1 || (layout.showSignatureOnDoc && pageNumber !== sigPageNumber)) && (
+            <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-slate-100">
+              {totalPages > 1 && (
+                <div className="flex-1 min-w-[160px] flex items-center gap-2">
+                  <span className="text-[10px] font-semibold text-slate-400">1</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={totalPages}
+                    value={pageNumber}
+                    disabled={loadingPdf}
+                    onChange={(e) => goToPage(Number(e.target.value))}
+                    aria-label="เลื่อนเลือกหน้าเอกสาร"
+                    className="w-full h-1.5 accent-indigo-600 cursor-pointer"
+                  />
+                  <span className="text-[10px] font-semibold text-slate-400">{totalPages}</span>
+                </div>
+              )}
+
+              {layout.showSignatureOnDoc && pageNumber !== sigPageNumber && (
+                <button
+                  type="button"
+                  onClick={() => goToPage(sigPageNumber)}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold inline-flex items-center gap-1"
+                >
+                  <LocateFixed className="w-3 h-3" />
+                  <span>ไปหน้าลายเซ็น (หน้า {sigPageNumber})</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {loadingPdf && (
@@ -1288,33 +1755,21 @@ export function DirectorStampCanvas({
           </div>
         )}
 
-        <div
-          ref={scrollContainerRef}
-          className={`w-full overflow-auto rounded-xl border border-slate-300 bg-slate-300/60 p-2 ${
-            isFullscreenWorkspace ? "max-h-[82vh]" : "max-h-[70vh]"
-          }`}
-        >
-          <div className="min-w-full flex justify-center">
-            <canvas
-              ref={previewCanvasRef}
-              width={CANVAS_W}
-              height={canvasHeight}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
-              style={{
-                width: `${zoomedWidthPx}px`,
-                maxWidth: zoomPercent === 100 ? "100%" : "none",
-              }}
-              className={`h-auto bg-white shadow-lg rounded-lg border border-slate-300 touch-none select-none ${
-                toolMode === "pen"
-                  ? "cursor-crosshair"
-                  : "cursor-grab active:cursor-grabbing"
-              }`}
-            />
+        {!loadingPdf && !pdfError && pdfDocProxy && (
+          <div
+            ref={scrollContainerRef}
+            onScroll={handleContainerScroll}
+            className={`w-full overflow-auto rounded-xl border border-slate-300 bg-slate-300/60 p-2 sm:p-3 ${
+              isFullscreenWorkspace
+                ? "flex-1 min-h-0"
+                : "max-h-[65vh] lg:max-h-none lg:flex-1 lg:min-h-[300px]"
+            }`}
+          >
+            <div className="min-w-full w-fit mx-auto flex flex-col items-center gap-3">
+              {pageListToRender.map((pNum) => renderPageSlot(pNum))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Modal สำหรับวาดลายเซ็น ผอ. (รองรับน้ำหนักกดปากกา iPad เช่นกัน) */}
