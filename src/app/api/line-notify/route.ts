@@ -1,5 +1,45 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { sendLineFlexNotification } from "@/lib/line-notify";
+
+async function resolveTeacherEmail(planData: any): Promise<string | null> {
+  if (planData?.teacher_email && typeof planData.teacher_email === "string" && planData.teacher_email.trim()) {
+    return planData.teacher_email.trim();
+  }
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+
+  try {
+    const supabase = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    if (planData?.created_by) {
+      const { data } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("id", planData.created_by)
+        .maybeSingle();
+      if (data?.email) return data.email;
+    }
+
+    if (planData?.teacher_id) {
+      const { data } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("teacher_id", planData.teacher_id)
+        .limit(1)
+        .maybeSingle();
+      if (data?.email) return data.email;
+    }
+  } catch (err) {
+    console.warn("Could not resolve teacher email for LINE notify:", err);
+  }
+
+  return null;
+}
 
 export async function GET() {
   return NextResponse.json({ status: "ok", message: "LINE Webhook & Notify endpoint is ready" });
@@ -51,6 +91,8 @@ export async function POST(request: Request) {
     let buttons: { label: string; url: string; primary?: boolean; color?: string }[] = [];
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://pongrad-plan.vercel.app";
+    const teacherEmail = await resolveTeacherEmail(planData);
+    const emailField = teacherEmail ? [{ label: "อีเมลครู", value: teacherEmail }] : [];
 
     if (eventType === "plan_submitted") {
       title = "ส่งแผนการจัดการเรียนรู้";
@@ -58,6 +100,7 @@ export async function POST(request: Request) {
       headerColor = "#1e3a8a"; // Navy
       fields = [
         { label: "ผู้สอน", value: planData.teacher_name },
+        ...emailField,
         { label: "รายวิชา", value: `${planData.subject} (${planData.class_level})` },
         { label: "รูปแบบ", value: `${planData.scope_value} (v${planData.version})` },
       ];
@@ -74,6 +117,7 @@ export async function POST(request: Request) {
       headerColor = "#7c3aed"; // Purple
       fields = [
         { label: "ผู้สอน", value: planData.teacher_name },
+        ...emailField,
         { label: "รายวิชา", value: `${planData.subject} (${planData.class_level})` },
         { label: "รูปแบบ", value: `${planData.scope_value}` },
         { label: "ประเภทไฟล์", value: planData.use_existing_file ? "ใช้ไฟล์แผนเดิม" : "อัปโหลดไฟล์บันทึกใหม่" },
@@ -102,6 +146,7 @@ export async function POST(request: Request) {
 
       fields = [
         { label: "ผู้สอน", value: planData.teacher_name },
+        ...emailField,
         { label: "รายวิชา", value: `${planData.subject} (${planData.class_level})` },
         { label: "สถานะใหม่", value: reviewData.status_assigned },
       ];
@@ -133,6 +178,7 @@ export async function POST(request: Request) {
       headerColor = "#0d9488"; // Teal
       fields = [
         { label: "ผู้สอน", value: planData.teacher_name },
+        ...emailField,
         { label: "รายวิชา", value: `${planData.subject} (${planData.class_level})` },
         { label: "รูปแบบ", value: `${planData.scope_value} (v${planData.version})` },
       ];

@@ -253,6 +253,7 @@ export default function SubmitPlanPage() {
             planData: {
               ...newPlan,
               version: 1,
+              teacher_email: user.email || undefined,
             },
           }),
         });

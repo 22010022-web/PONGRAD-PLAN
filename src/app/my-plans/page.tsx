@@ -133,6 +133,7 @@ export default function MyPlansPage() {
               ...selectedPlanForPost,
               post_file_url: finalPostUrl,
               use_existing_file: useExistingFile,
+              teacher_email: user?.email || undefined,
             },
           }),
         });
@@ -305,6 +306,7 @@ export default function MyPlansPage() {
               planData: {
                 ...selectedPlanForRevise,
                 ...updatePayload,
+                teacher_email: user?.email || undefined,
               },
             }),
           });
