@@ -175,11 +175,10 @@ export function sanitizeFileName(name: string) {
   return (name || "document.pdf").replace(/[\\/:*?"<>|#%]+/g, "_").slice(0, 150);
 }
 
-// หา (หรือสร้าง) โฟลเดอร์ย่อยภายใต้ parentFolderId (ค่าเริ่มต้นคือโฟลเดอร์หลักของโรงเรียน)
-export async function ensureSubfolder(
+export async function findSubfolder(
   folderName: string,
   parentFolderId?: string
-): Promise<string> {
+): Promise<string | null> {
   const drive = getDrive();
   const parentId = parentFolderId || getRootFolderId();
   const name = sanitizeFileName(folderName || "ไม่ระบุชื่อ");
@@ -192,8 +191,20 @@ export async function ensureSubfolder(
     includeItemsFromAllDrives: true,
     corpora: "allDrives",
   });
-  const existing = found.data.files?.[0]?.id;
+  return found.data.files?.[0]?.id || null;
+}
+
+// หา (หรือสร้าง) โฟลเดอร์ย่อยภายใต้ parentFolderId (ค่าเริ่มต้นคือโฟลเดอร์หลักของโรงเรียน)
+export async function ensureSubfolder(
+  folderName: string,
+  parentFolderId?: string
+): Promise<string> {
+  const existing = await findSubfolder(folderName, parentFolderId);
   if (existing) return existing;
+
+  const drive = getDrive();
+  const parentId = parentFolderId || getRootFolderId();
+  const name = sanitizeFileName(folderName || "ไม่ระบุชื่อ");
 
   const created = await drive.files.create({
     requestBody: { name, mimeType: FOLDER_MIME, parents: [parentId] },
@@ -241,10 +252,13 @@ export async function getNextSubmissionSequence(folderId: string): Promise<numbe
   return Math.max(files.length, maxSeq) + 1;
 }
 
-// ตรวจว่าไฟล์อยู่ในโฟลเดอร์ของโรงเรียน (รองรับทั้งไฟล์ในโฟลเดอร์ครู และโฟลเดอร์แยกวิชา)
-export async function isInsideSchoolFolder(fileId: string): Promise<boolean> {
+// ตรวจว่าไฟล์อยู่ในโฟลเดอร์ของโรงเรียนหรือโฟลเดอร์เป้าหมาย (รองรับทั้งโฟลเดอร์ครูและโฟลเดอร์แยกวิชา)
+export async function isInsideSchoolFolder(
+  fileId: string,
+  ancestorFolderId?: string
+): Promise<boolean> {
   const drive = getDrive();
-  const rootId = getRootFolderId();
+  const targetId = ancestorFolderId || getRootFolderId();
   const visited = new Set<string>();
   let frontier: string[] = [fileId];
 
@@ -259,7 +273,7 @@ export async function isInsideSchoolFolder(fileId: string): Promise<boolean> {
         supportsAllDrives: true,
       });
       const parents = item.data.parents || [];
-      if (parents.includes(rootId)) return true;
+      if (parents.includes(targetId)) return true;
       nextFrontier.push(...parents);
     }
     frontier = nextFrontier;

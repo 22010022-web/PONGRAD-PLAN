@@ -144,20 +144,25 @@ export default function SubmitPlanPage() {
   const [scopeType, setScopeType] = useState<"term" | "unit" | "week">("term");
   const [scopeValue, setScopeValue] = useState(TERM_OPTIONS[0].value);
   const [unitTitle, setUnitTitle] = useState("");
-  const [subject, setSubject] = useState("ภาษาไทย");
+  const [subject, setSubject] = useState("");
   const [customSubject, setCustomSubject] = useState("");
   const [classLevel, setClassLevel] = useState("ป.1");
   const [fileUrl, setFileUrl] = useState("");
   const [fileId, setFileId] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedForSubject, setUploadedForSubject] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isResettingUpload, setIsResettingUpload] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
+  const resolvedSubject = subject === "__CUSTOM__" ? customSubject.trim() : subject.trim();
+  const isSubjectSelected = Boolean(resolvedSubject);
+  const isSubjectLocked = Boolean(uploadedForSubject && fileId);
+
   useEffect(() => {
-    setSubject(teacherProfileConfig.defaultSubject);
     setClassLevel(teacherProfileConfig.defaultClass);
     if (!teacherProfileConfig.allowWeek) {
       setScopeType((prev) => (prev === "week" ? "unit" : prev));
@@ -174,18 +179,39 @@ export default function SubmitPlanPage() {
     }
   }, [scopeType]);
 
+  const discardUnsubmittedDriveFile = async (targetFileId: string | null) => {
+    if (!targetFileId) return;
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    await fetch("/api/drive/discard", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ fileId: targetFileId }),
+    }).catch(() => {});
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!resolvedSubject) {
+      e.target.value = "";
+      setErrorMsg("กรุณาเลือกรายวิชาในข้อ 3 ให้เรียบร้อยก่อนอัปโหลดไฟล์ PDF");
+      return;
+    }
+
+    const previousUnsubmittedId = fileId;
     setErrorMsg("");
     setIsUploading(true);
     setUploadProgress(0);
 
     try {
       const teacherName = profile?.full_name || teacher?.name || user?.email || "ครูผู้สอน";
-      const resolvedSubject =
-        subject === "__CUSTOM__" ? customSubject.trim() || "รายวิชาอื่นๆ" : subject;
       const result = await uploadPdfToGoogleDrive(
         file,
         teacherName,
@@ -200,11 +226,31 @@ export default function SubmitPlanPage() {
       setFileId(result.fileId);
       setFileUrl(result.viewUrl);
       setUploadedFileName(result.fileName);
+      setUploadedForSubject(resolvedSubject);
+      if (previousUnsubmittedId && previousUnsubmittedId !== result.fileId) {
+        await discardUnsubmittedDriveFile(previousUnsubmittedId);
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || "อัปโหลดไฟล์ขึ้น Google Drive ไม่สำเร็จ");
       setUploadProgress(null);
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleUnlockSubjectAndClearFile = async () => {
+    const oldId = fileId;
+    setIsResettingUpload(true);
+    setErrorMsg("");
+    try {
+      await discardUnsubmittedDriveFile(oldId);
+    } finally {
+      setFileId(null);
+      setFileUrl("");
+      setUploadedFileName(null);
+      setUploadedForSubject(null);
+      setUploadProgress(null);
+      setIsResettingUpload(false);
     }
   };
 
@@ -214,14 +260,18 @@ export default function SubmitPlanPage() {
       setErrorMsg("กรุณาเข้าสู่ระบบก่อนส่งแผนการสอน");
       return;
     }
-    if (!fileUrl.trim().startsWith("http")) {
-      setErrorMsg("กรุณาระบุลิงก์ไฟล์ PDF จาก Google Drive ที่ถูกต้อง");
+    if (!resolvedSubject) {
+      setErrorMsg("กรุณาเลือกรายวิชาก่อนส่งแผนการสอน");
       return;
     }
-
-    const resolvedSubject = subject === "__CUSTOM__" ? customSubject.trim() : subject;
-    if (!resolvedSubject) {
-      setErrorMsg("กรุณาระบุชื่อรายวิชา");
+    if (fileId && uploadedForSubject && resolvedSubject !== uploadedForSubject) {
+      setErrorMsg(
+        `รายวิชาที่เลือก (${resolvedSubject}) ไม่ตรงกับโฟลเดอร์ที่อัปโหลดไฟล์ (${uploadedForSubject}) กรุณากดเปลี่ยนวิชาเพื่ออัปโหลดใหม่`
+      );
+      return;
+    }
+    if (!fileUrl.trim().startsWith("http")) {
+      setErrorMsg("กรุณาระบุลิงก์ไฟล์ PDF จาก Google Drive ที่ถูกต้อง");
       return;
     }
 
@@ -433,14 +483,17 @@ export default function SubmitPlanPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              3. รายวิชา / แผนการจัดการเรียนรู้{" "}
+              3. รายวิชา / แผนการจัดการเรียนรู้ <span className="text-red-500">*</span>{" "}
               <span className="font-normal text-pink-700">{teacherProfileConfig.subjectHint}</span>
             </label>
             <select
+              required
               value={subject}
+              disabled={isSubjectLocked || isUploading || isResettingUpload}
               onChange={(e) => setSubject(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800 font-medium"
+              className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800 font-medium disabled:opacity-65 disabled:bg-slate-100 disabled:cursor-not-allowed"
             >
+              <option value="">-- กรุณาเลือกรายวิชาก่อนอัปโหลดไฟล์ --</option>
               {teacherProfileConfig.mode === "early" &&
                 EARLY_SUBJECTS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -482,10 +535,27 @@ export default function SubmitPlanPage() {
                 type="text"
                 required
                 value={customSubject}
+                disabled={isSubjectLocked || isUploading || isResettingUpload}
                 onChange={(e) => setCustomSubject(e.target.value)}
                 placeholder="พิมพ์ชื่อรายวิชาเพิ่มเติม..."
-                className="mt-2 w-full px-4 py-2 rounded-xl text-sm glass-input text-slate-800"
+                className="mt-2 w-full px-4 py-2 rounded-xl text-sm glass-input text-slate-800 disabled:opacity-65 disabled:bg-slate-100 disabled:cursor-not-allowed"
               />
+            )}
+
+            {isSubjectLocked && (
+              <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-900 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  🔒 ล็อกรายวิชาตามโฟลเดอร์ที่อัปโหลดแล้ว (<b>{uploadedForSubject}</b>)
+                </span>
+                <button
+                  type="button"
+                  disabled={isResettingUpload || isSubmitting}
+                  onClick={handleUnlockSubjectAndClearFile}
+                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 font-bold transition-colors disabled:opacity-50"
+                >
+                  {isResettingUpload ? "กำลังล้างไฟล์..." : "เปลี่ยนวิชา (อัปโหลดใหม่)"}
+                </button>
+              </div>
             )}
           </div>
 
@@ -546,30 +616,48 @@ export default function SubmitPlanPage() {
               อัปโหลดไฟล์ PDF แผนการสอน (เก็บเข้า Google Drive โรงเรียนอัตโนมัติ)
             </label>
             <p className="text-[11px] text-slate-500 mb-2">
-              ระบบจะสร้างโฟลเดอร์แยกวิชาให้อัตโนมัติ (
-              <span className="font-semibold text-pink-700">
-                {profile?.full_name || teacher?.name || "ชื่อครู"} /{" "}
-                {subject === "__CUSTOM__" ? customSubject.trim() || "รายวิชาอื่นๆ" : subject}
-              </span>
-              ) และตั้งชื่อไฟล์เรียงลำดับตามวันเวลาที่ส่ง
+              {isSubjectSelected ? (
+                <>
+                  ระบบจะบันทึกเข้าโฟลเดอร์:{" "}
+                  <span className="font-semibold text-pink-700">
+                    {profile?.full_name || teacher?.name || "ชื่อครู"} / {resolvedSubject}
+                  </span>{" "}
+                  และตั้งชื่อไฟล์เรียงลำดับตามวันเวลาที่ส่ง
+                </>
+              ) : (
+                <span className="text-amber-700 font-semibold">
+                  ⚠️ กรุณาเลือกรายวิชาในข้อ 3 ด้านบนก่อน จึงจะสามารถอัปโหลดไฟล์ PDF ได้
+                </span>
+              )}
             </p>
-            <label className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl border-2 border-dashed border-pink-300 bg-white hover:bg-pink-50/40 cursor-pointer transition-colors text-xs font-semibold text-pink-700">
+            <label
+              className={`flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl border-2 border-dashed transition-colors text-xs font-semibold ${
+                !isSubjectSelected || isUploading || isResettingUpload
+                  ? "border-slate-300 bg-slate-100 text-slate-400 cursor-not-allowed"
+                  : "border-pink-300 bg-white hover:bg-pink-50/40 cursor-pointer text-pink-700"
+              }`}
+            >
               {isUploading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span>กำลังอัปโหลดเข้า Google Drive... {uploadProgress ?? 0}%</span>
                 </>
+              ) : !isSubjectSelected ? (
+                <>
+                  <AlertCircle className="w-4 h-4" />
+                  <span>กรุณาเลือกรายวิชาในข้อ 3 ก่อนเลือกไฟล์ PDF</span>
+                </>
               ) : (
                 <>
                   <UploadCloud className="w-4 h-4" />
-                  <span>{uploadedFileName ? `เปลี่ยนไฟล์ (${uploadedFileName})` : "เลือกไฟล์ PDF จากเครื่อง"}</span>
+                  <span>{uploadedFileName ? `อัปโหลดใหม่แทนไฟล์ (${uploadedFileName})` : "เลือกไฟล์ PDF จากเครื่อง"}</span>
                 </>
               )}
               <input
                 type="file"
                 accept="application/pdf,.pdf"
                 onChange={handleFileChange}
-                disabled={isUploading}
+                disabled={!isSubjectSelected || isUploading || isResettingUpload}
                 className="hidden"
               />
             </label>
