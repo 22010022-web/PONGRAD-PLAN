@@ -175,14 +175,17 @@ export function sanitizeFileName(name: string) {
   return (name || "document.pdf").replace(/[\\/:*?"<>|#%]+/g, "_").slice(0, 150);
 }
 
-// หา (หรือสร้าง) โฟลเดอร์ย่อยของครูแต่ละคนภายใต้โฟลเดอร์หลักของโรงเรียน
-export async function ensureSubfolder(folderName: string): Promise<string> {
+// หา (หรือสร้าง) โฟลเดอร์ย่อยภายใต้ parentFolderId (ค่าเริ่มต้นคือโฟลเดอร์หลักของโรงเรียน)
+export async function ensureSubfolder(
+  folderName: string,
+  parentFolderId?: string
+): Promise<string> {
   const drive = getDrive();
-  const rootId = getRootFolderId();
+  const parentId = parentFolderId || getRootFolderId();
   const name = sanitizeFileName(folderName || "ไม่ระบุชื่อ");
 
   const found = await drive.files.list({
-    q: `name = '${escapeQuery(name)}' and mimeType = '${FOLDER_MIME}' and '${rootId}' in parents and trashed = false`,
+    q: `name = '${escapeQuery(name)}' and mimeType = '${FOLDER_MIME}' and '${parentId}' in parents and trashed = false`,
     fields: "files(id, name)",
     pageSize: 1,
     supportsAllDrives: true,
@@ -193,7 +196,7 @@ export async function ensureSubfolder(folderName: string): Promise<string> {
   if (existing) return existing;
 
   const created = await drive.files.create({
-    requestBody: { name, mimeType: FOLDER_MIME, parents: [rootId] },
+    requestBody: { name, mimeType: FOLDER_MIME, parents: [parentId] },
     fields: "id",
     supportsAllDrives: true,
   });
@@ -201,16 +204,65 @@ export async function ensureSubfolder(folderName: string): Promise<string> {
   return created.data.id;
 }
 
-// ตรวจว่าไฟล์อยู่ในโฟลเดอร์ของโรงเรียน (โฟลเดอร์หลัก หรือโฟลเดอร์ย่อยชั้นเดียว)
+// สร้างโครงสร้างโฟลเดอร์: โฟลเดอร์โรงเรียน -> ชื่อครู -> รายวิชา (หากระบุวิชา)
+export async function ensureTeacherSubjectFolder(
+  teacherName: string,
+  subjectName?: string
+): Promise<string> {
+  const teacherFolderId = await ensureSubfolder(teacherName || "ไม่ระบุชื่อ");
+  const cleanSubject = (subjectName || "").trim();
+  if (!cleanSubject) {
+    return teacherFolderId;
+  }
+  return ensureSubfolder(cleanSubject, teacherFolderId);
+}
+
+// หาลำดับไฟล์ถัดไปในโฟลเดอร์ (เช่น 001, 002, 003...) เพื่อจัดเรียงก่อน-หลังได้แม่นยำ
+export async function getNextSubmissionSequence(folderId: string): Promise<number> {
+  const drive = getDrive();
+  const listRes = await drive.files.list({
+    q: `'${folderId}' in parents and mimeType != '${FOLDER_MIME}' and trashed = false`,
+    fields: "files(id, name)",
+    pageSize: 1000,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    corpora: "allDrives",
+  });
+
+  const files = listRes.data.files || [];
+  let maxSeq = 0;
+  for (const f of files) {
+    const fname = f.name || "";
+    const match = /^(\d{1,4})_/.exec(fname);
+    if (match?.[1]) {
+      maxSeq = Math.max(maxSeq, Number(match[1]));
+    }
+  }
+  return Math.max(files.length, maxSeq) + 1;
+}
+
+// ตรวจว่าไฟล์อยู่ในโฟลเดอร์ของโรงเรียน (รองรับทั้งไฟล์ในโฟลเดอร์ครู และโฟลเดอร์แยกวิชา)
 export async function isInsideSchoolFolder(fileId: string): Promise<boolean> {
   const drive = getDrive();
   const rootId = getRootFolderId();
-  const file = await drive.files.get({ fileId, fields: "parents", supportsAllDrives: true });
-  const parents = file.data.parents || [];
-  if (parents.includes(rootId)) return true;
-  for (const parentId of parents) {
-    const parent = await drive.files.get({ fileId: parentId, fields: "parents", supportsAllDrives: true });
-    if ((parent.data.parents || []).includes(rootId)) return true;
+  const visited = new Set<string>();
+  let frontier: string[] = [fileId];
+
+  for (let depth = 0; depth < 5 && frontier.length > 0; depth++) {
+    const nextFrontier: string[] = [];
+    for (const currentId of frontier) {
+      if (visited.has(currentId)) continue;
+      visited.add(currentId);
+      const item = await drive.files.get({
+        fileId: currentId,
+        fields: "parents",
+        supportsAllDrives: true,
+      });
+      const parents = item.data.parents || [];
+      if (parents.includes(rootId)) return true;
+      nextFrontier.push(...parents);
+    }
+    frontier = nextFrontier;
   }
   return false;
 }

@@ -10,6 +10,12 @@ import {
   DirectorOverlayExport,
   DirectorStampCanvas,
 } from "@/components/director-stamp-canvas";
+import {
+  buildSubmissionOrderMap,
+  formatThaiDateTime,
+  PlanSortOrder,
+  sortPlansByDate,
+} from "@/lib/plan-ordering";
 
 export default function ReviewPage() {
   const { user, profile, isAdmin } = useAuth();
@@ -17,6 +23,7 @@ export default function ReviewPage() {
   const autoOpenedIdRef = useRef<string | null>(null);
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [sortOrder, setSortOrder] = useState<PlanSortOrder>("oldest");
   const [selectedPlan, setSelectedPlan] = useState<LessonPlan | null>(null);
   const [reviewNote, setReviewNote] = useState("");
   const [stampOntoPdf, setStampOntoPdf] = useState(true);
@@ -215,8 +222,10 @@ export default function ReviewPage() {
     );
   }
 
-  const pendingPlans = plans.filter(
-    (p) => p.status === "รอตรวจแผน" || p.status === "รอตรวจบันทึก"
+  const orderMap = buildSubmissionOrderMap(plans);
+  const pendingPlans = sortPlansByDate(
+    plans.filter((p) => p.status === "รอตรวจแผน" || p.status === "รอตรวจบันทึก"),
+    sortOrder
   );
 
   return (
@@ -233,12 +242,23 @@ export default function ReviewPage() {
 
       {/* รายการแผนที่รอตรวจ */}
       <div className="space-y-4">
-        <h2 className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
-          <span>รายการที่รอการตรวจอนุมัติ</span>
-          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-extrabold">
-            {pendingPlans.length}
-          </span>
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+            <span>รายการที่รอการตรวจอนุมัติ</span>
+            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-extrabold">
+              {pendingPlans.length}
+            </span>
+          </h2>
+
+          <select
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value as PlanSortOrder)}
+            className="text-xs rounded-xl glass-input px-3 py-1.5 text-slate-700 font-semibold"
+          >
+            <option value="oldest">เรียง: ส่งก่อนตรวจก่อน (ลำดับ 1 → ...)</option>
+            <option value="newest">เรียง: ส่งล่าสุดอยู่บน</option>
+          </select>
+        </div>
 
         {isLoading ? (
           <div className="glass-card rounded-2xl p-8 text-center text-slate-500 text-sm">
@@ -250,20 +270,30 @@ export default function ReviewPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {pendingPlans.map((p) => (
+            {pendingPlans.map((p) => {
+              const order = orderMap[p.id];
+              const { dateText, timeText } = formatThaiDateTime(p.created_at);
+              return (
               <div
                 key={p.id}
                 className="glass-card rounded-2xl p-5 border border-white/80 space-y-3 hover:shadow-md transition-all"
               >
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-start gap-2">
                   <div>
-                    <h3 className="font-bold text-slate-900 text-base">{p.teacher_name}</h3>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {order && (
+                        <span className="px-2 py-0.5 rounded-md bg-pink-50 text-pink-700 border border-pink-200 text-[11px] font-bold">
+                          ส่งครั้งที่ {order.teacherOrder} ({p.subject} #{order.subjectOrder})
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="font-bold text-slate-900 text-base mt-1">{p.teacher_name}</h3>
                     <p className="text-xs text-slate-500">
                       {p.subject} ({p.class_level})
                     </p>
                   </div>
                   <span
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 ${
                       p.status === "รอตรวจแผน"
                         ? "bg-amber-100 text-amber-800"
                         : "bg-purple-100 text-purple-800"
@@ -283,7 +313,7 @@ export default function ReviewPage() {
                     </div>
                   )}
                   <div>
-                    <b>วันที่ส่ง:</b> {new Date(p.created_at).toLocaleDateString("th-TH")}
+                    <b>วันที่ส่ง:</b> {dateText} {timeText}
                   </div>
                 </div>
 
@@ -306,7 +336,8 @@ export default function ReviewPage() {
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

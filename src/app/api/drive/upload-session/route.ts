@@ -3,9 +3,10 @@
 import { NextResponse } from "next/server";
 import { requireUser, errorResponse, HttpError } from "@/lib/server-auth";
 import {
-  ensureSubfolder,
+  ensureTeacherSubjectFolder,
   getAccessToken,
   getDrive,
+  getNextSubmissionSequence,
   isUsingOAuthDrive,
   sanitizeFileName,
   explainDriveError,
@@ -20,6 +21,16 @@ const KIND_PREFIX: Record<string, string> = {
   review: "ผอ.ตรวจ",
 };
 
+function formatBangkokThaiStamp(): string {
+  const bkk = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const yearBe = bkk.getUTCFullYear() + 543;
+  const month = String(bkk.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(bkk.getUTCDate()).padStart(2, "0");
+  const hour = String(bkk.getUTCHours()).padStart(2, "0");
+  const min = String(bkk.getUTCMinutes()).padStart(2, "0");
+  return `${yearBe}-${month}-${day}_${hour}.${min}น`;
+}
+
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser(req);
@@ -28,6 +39,7 @@ export async function POST(req: Request) {
     const fileSize = Number(body.fileSize || 0);
     const mimeType = String(body.mimeType || "application/pdf");
     const kind = KIND_PREFIX[body.kind] ? String(body.kind) : "plan";
+    const subject = String(body.subject || "").trim();
 
     if (!fileSize || fileSize <= 0) throw new HttpError(400, "ไม่พบขนาดไฟล์");
     if (fileSize > MAX_BYTES) throw new HttpError(400, "ไฟล์ใหญ่เกิน 300MB กรุณาบีบอัดด้วย PDF Tools ก่อน");
@@ -38,7 +50,8 @@ export async function POST(req: Request) {
     const ownerName = profile?.full_name || user.email || "ไม่ระบุชื่อ";
     let folderId: string;
     try {
-      folderId = await ensureSubfolder(ownerName);
+      // แยกโฟลเดอร์ย่อยตามรายวิชาภายใต้โฟลเดอร์ชื่อครู
+      folderId = await ensureTeacherSubjectFolder(ownerName, subject);
       const folderMeta = await getDrive().files.get({
         fileId: folderId,
         fields: "id, driveId, capabilities(canAddChildren)",
@@ -63,8 +76,10 @@ export async function POST(req: Request) {
       throw new HttpError(502, explainDriveError(err));
     }
 
-    const stamp = new Date().toISOString().slice(0, 10);
-    const targetName = sanitizeFileName(`[${KIND_PREFIX[kind]}]_${stamp}_${fileName}`);
+    const seq = await getNextSubmissionSequence(folderId).catch(() => 1);
+    const seqStr = String(seq).padStart(3, "0");
+    const stamp = formatBangkokThaiStamp();
+    const targetName = sanitizeFileName(`${seqStr}_${stamp}_[${KIND_PREFIX[kind]}]_${fileName}`);
     const accessToken = await getAccessToken();
     const forwardedHost = req.headers.get("x-forwarded-host");
     const forwardedProto = req.headers.get("x-forwarded-proto") || "https";

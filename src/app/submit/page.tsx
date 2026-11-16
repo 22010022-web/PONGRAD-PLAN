@@ -184,8 +184,18 @@ export default function SubmitPlanPage() {
 
     try {
       const teacherName = profile?.full_name || teacher?.name || user?.email || "ครูผู้สอน";
-      const result = await uploadPdfToGoogleDrive(file, teacherName, (pct) =>
-        setUploadProgress(pct)
+      const resolvedSubject =
+        subject === "__CUSTOM__" ? customSubject.trim() || "รายวิชาอื่นๆ" : subject;
+      const result = await uploadPdfToGoogleDrive(
+        file,
+        teacherName,
+        (pct) => setUploadProgress(pct),
+        {
+          kind: "plan",
+          subject: resolvedSubject,
+          classLevel,
+          scopeValue,
+        }
       );
       setFileId(result.fileId);
       setFileUrl(result.viewUrl);
@@ -536,7 +546,12 @@ export default function SubmitPlanPage() {
               อัปโหลดไฟล์ PDF แผนการสอน (เก็บเข้า Google Drive โรงเรียนอัตโนมัติ)
             </label>
             <p className="text-[11px] text-slate-500 mb-2">
-              เลือกไฟล์ .pdf จากเครื่อง ระบบจะอัปโหลดเข้าโฟลเดอร์ Google Drive ของโรงเรียนให้อัตโนมัติ (หรือวางลิงก์ Drive ด้านล่าง)
+              ระบบจะสร้างโฟลเดอร์แยกวิชาให้อัตโนมัติ (
+              <span className="font-semibold text-pink-700">
+                {profile?.full_name || teacher?.name || "ชื่อครู"} /{" "}
+                {subject === "__CUSTOM__" ? customSubject.trim() || "รายวิชาอื่นๆ" : subject}
+              </span>
+              ) และตั้งชื่อไฟล์เรียงลำดับตามวันเวลาที่ส่ง
             </p>
             <label className="flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl border-2 border-dashed border-pink-300 bg-white hover:bg-pink-50/40 cursor-pointer transition-colors text-xs font-semibold text-pink-700">
               {isUploading ? (

@@ -6,6 +6,12 @@ import { useAuth } from "@/context/auth-context";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
 import { LessonPlan, Teacher } from "@/types/database";
 import { FileText, CheckCircle2, Clock, AlertCircle, FileCheck, Search, Filter } from "lucide-react";
+import {
+  buildSubmissionOrderMap,
+  formatThaiDateTime,
+  PlanSortOrder,
+  sortPlansByDate,
+} from "@/lib/plan-ordering";
 
 export default function DashboardPage() {
   const { user, schoolSettings } = useAuth();
@@ -13,8 +19,10 @@ export default function DashboardPage() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filterTeacher, setFilterTeacher] = useState("");
+  const [filterSubject, setFilterSubject] = useState("");
   const [filterScope, setFilterScope] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  const [sortOrder, setSortOrder] = useState<PlanSortOrder>("newest");
 
   useEffect(() => {
     async function loadData() {
@@ -50,12 +58,19 @@ export default function DashboardPage() {
   const unitCount = plans.filter(p => p.scope_type === "unit").length;
   const weekCount = plans.filter(p => p.scope_type === "week").length;
 
-  const filteredPlans = plans.filter(p => {
-    if (filterTeacher && p.teacher_name !== filterTeacher) return false;
-    if (filterScope && p.scope_type !== filterScope) return false;
-    if (filterStatus && p.status !== filterStatus) return false;
-    return true;
-  });
+  const orderMap = buildSubmissionOrderMap(plans);
+  const subjectOptions = Array.from(new Set(plans.map((p) => p.subject).filter(Boolean)));
+
+  const filteredPlans = sortPlansByDate(
+    plans.filter((p) => {
+      if (filterTeacher && p.teacher_name !== filterTeacher) return false;
+      if (filterSubject && p.subject !== filterSubject) return false;
+      if (filterScope && p.scope_type !== filterScope) return false;
+      if (filterStatus && p.status !== filterStatus) return false;
+      return true;
+    }),
+    sortOrder
+  );
 
   return (
     <div className="space-y-6">
@@ -259,6 +274,19 @@ export default function DashboardPage() {
             </select>
 
             <select
+              value={filterSubject}
+              onChange={(e) => setFilterSubject(e.target.value)}
+              className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
+            >
+              <option value="">ทุกรายวิชา</option>
+              {subjectOptions.map((subj) => (
+                <option key={subj} value={subj}>
+                  {subj}
+                </option>
+              ))}
+            </select>
+
+            <select
               value={filterScope}
               onChange={(e) => setFilterScope(e.target.value)}
               className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
@@ -282,6 +310,15 @@ export default function DashboardPage() {
               <option value="บันทึกต้องแก้ไข">บันทึกต้องแก้ไข</option>
               <option value="เสร็จสมบูรณ์">เสร็จสมบูรณ์</option>
             </select>
+
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as PlanSortOrder)}
+              className="text-xs rounded-xl glass-input px-3 py-2 text-pink-800 font-bold"
+            >
+              <option value="newest">เรียง: ส่งล่าสุดอยู่บน</option>
+              <option value="oldest">เรียง: ส่งก่อนอยู่บน (ลำดับ 1 → ...)</option>
+            </select>
           </div>
         </div>
 
@@ -289,7 +326,7 @@ export default function DashboardPage() {
           <table className="w-full text-left text-sm text-slate-700">
             <thead className="bg-slate-50/80 text-xs font-bold text-slate-600 uppercase border-b border-slate-200">
               <tr>
-                <th className="py-3 px-4">วันที่ส่ง</th>
+                <th className="py-3 px-4">ลำดับ / วันที่ส่ง</th>
                 <th className="py-3 px-4">ครูผู้สอน</th>
                 <th className="py-3 px-4">รายวิชา (ระดับชั้น)</th>
                 <th className="py-3 px-4">รูปแบบการส่ง</th>
@@ -305,11 +342,23 @@ export default function DashboardPage() {
                   </td>
                 </tr>
               ) : (
-                filteredPlans.map((p) => (
+                filteredPlans.map((p) => {
+                  const order = orderMap[p.id];
+                  const { dateText, timeText } = formatThaiDateTime(p.created_at);
+                  return (
                   <tr key={p.id} className="hover:bg-white/60 transition-colors">
                     <td className="py-3 px-4 text-xs text-slate-500">
-                      {new Date(p.created_at).toLocaleDateString("th-TH")}
-                      <span className="block text-[10px] text-slate-400">v{p.version}</span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {order && (
+                          <span className="px-1.5 py-0.5 rounded-md bg-pink-50 text-pink-700 border border-pink-200 font-bold text-[10px]">
+                            #{order.teacherOrder} (วิชา #{order.subjectOrder})
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 font-medium text-slate-700">{dateText}</div>
+                      <span className="block text-[10px] text-slate-400">
+                        {timeText} · v{p.version}
+                      </span>
                     </td>
                     <td className="py-3 px-4 font-bold text-slate-800">{p.teacher_name}</td>
                     <td className="py-3 px-4">
@@ -356,7 +405,8 @@ export default function DashboardPage() {
                       )}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

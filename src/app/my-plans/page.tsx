@@ -16,11 +16,19 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { uploadPdfToGoogleDrive } from "@/lib/drive-upload-client";
+import {
+  buildSubmissionOrderMap,
+  formatThaiDateTime,
+  PlanSortOrder,
+  sortPlansByDate,
+} from "@/lib/plan-ordering";
 
 export default function MyPlansPage() {
   const { user, isAdmin } = useAuth();
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [filterSubject, setFilterSubject] = useState("");
+  const [sortOrder, setSortOrder] = useState<PlanSortOrder>("newest");
   const [actionAlert, setActionAlert] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [deletingPlanId, setDeletingPlanId] = useState<string | null>(null);
 
@@ -81,7 +89,12 @@ export default function MyPlansPage() {
         file,
         selectedPlanForPost.teacher_name || "ครูผู้สอน",
         (pct) => setPostUploadProgress(pct),
-        { kind: "post" }
+        {
+          kind: "post",
+          subject: selectedPlanForPost.subject,
+          classLevel: selectedPlanForPost.class_level,
+          scopeValue: selectedPlanForPost.scope_value,
+        }
       );
       setPostFileId(result.fileId);
       setPostFileUrl(result.viewUrl);
@@ -233,6 +246,9 @@ export default function MyPlansPage() {
         (pct) => setReviseUploadProgress(pct),
         {
           kind: isPostRevision ? "post" : "plan",
+          subject: selectedPlanForRevise.subject,
+          classLevel: selectedPlanForRevise.class_level,
+          scopeValue: selectedPlanForRevise.scope_value,
           replaceFileId: oldFileId,
           planId: selectedPlanForRevise.id,
         }
@@ -345,18 +361,49 @@ export default function MyPlansPage() {
     );
   }
 
+  const orderMap = buildSubmissionOrderMap(plans);
+  const subjectOptions = Array.from(new Set(plans.map((p) => p.subject).filter(Boolean)));
+  const filteredPlans = plans.filter((p) => !filterSubject || p.subject === filterSubject);
+  const visiblePlans = sortPlansByDate(filteredPlans, sortOrder);
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h1 className="font-display font-bold text-xl sm:text-2xl text-slate-800 flex items-center gap-2">
             <BookOpen className="w-6 h-6 text-pink-600" />
             แผนการจัดการเรียนรู้ของฉัน
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            ติดตามสถานะการตรวจ อัปโหลดฉบับแก้ไขแทนไฟล์เดิม และส่งบันทึกหลังสอน
+            ติดตามสถานะการตรวจ แยกดูตามรายวิชา และจัดเรียงตามลำดับการส่งก่อน-หลัง
           </p>
         </div>
+
+        {plans.length > 0 && (
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+            <select
+              value={filterSubject}
+              onChange={(e) => setFilterSubject(e.target.value)}
+              className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
+            >
+              <option value="">ทุกรายวิชา ({plans.length})</option>
+              {subjectOptions.map((subj) => (
+                <option key={subj} value={subj}>
+                  {subj}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as PlanSortOrder)}
+              className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
+            >
+              <option value="newest">เรียง: ส่งล่าสุดอยู่บน</option>
+              <option value="oldest">เรียง: ส่งก่อนอยู่บน (ลำดับ 1 → ...)</option>
+            </select>
+          </div>
+        )}
       </div>
 
       {actionAlert && (
@@ -377,13 +424,15 @@ export default function MyPlansPage() {
       )}
 
       <div className="grid grid-cols-1 gap-4">
-        {plans.length === 0 ? (
+        {visiblePlans.length === 0 ? (
           <div className="glass-card rounded-3xl p-12 text-center text-slate-500">
-            ยังไม่มีแผนการสอนที่ส่งในระบบ
+            {plans.length === 0 ? "ยังไม่มีแผนการสอนที่ส่งในระบบ" : "ไม่พบแผนการสอนในรายวิชาที่เลือก"}
           </div>
         ) : (
-          plans.map((p) => {
+          visiblePlans.map((p) => {
             const latestReview = p.reviews && p.reviews.length > 0 ? p.reviews[p.reviews.length - 1] : null;
+            const order = orderMap[p.id];
+            const { dateText, timeText } = formatThaiDateTime(p.created_at);
 
             return (
               <div
@@ -393,12 +442,21 @@ export default function MyPlansPage() {
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
+                      {order && (
+                        <span className="px-2 py-0.5 rounded-lg bg-pink-50 text-pink-700 border border-pink-200 text-[11px] font-bold">
+                          ส่งครั้งที่ {order.subjectOrder} ({p.subject})
+                        </span>
+                      )}
                       <span className="font-bold text-slate-900 text-base">{p.subject}</span>
                       <span className="text-xs text-slate-500">({p.class_level})</span>
                       <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-semibold">
                         {p.scope_value}
                       </span>
                       <span className="text-[11px] text-slate-400">v{p.version}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                      <span>ส่งเมื่อ: {dateText} {timeText}</span>
+                      {order && <span>· ลำดับรวมทั้งหมด #{order.teacherOrder}</span>}
                     </div>
                     {p.unit_title && (
                       <div className="text-xs text-pink-700 font-medium mt-0.5">

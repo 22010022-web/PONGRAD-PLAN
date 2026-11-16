@@ -9,6 +9,9 @@ export interface DriveUploadResult {
 
 export interface DriveUploadOptions {
   kind?: "plan" | "post" | "review";
+  subject?: string;
+  classLevel?: string;
+  scopeValue?: string;
   replaceFileId?: string | null;
   planId?: string;
 }
@@ -48,6 +51,9 @@ export async function uploadPdfToGoogleDrive(
       teacherName,
       fileSize: file.size,
       kind: options?.kind || "plan",
+      subject: options?.subject || undefined,
+      classLevel: options?.classLevel || undefined,
+      scopeValue: options?.scopeValue || undefined,
     }),
   });
 
