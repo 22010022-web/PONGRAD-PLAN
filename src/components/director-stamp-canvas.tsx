@@ -20,11 +20,13 @@ import {
   PanelLeftOpen,
   PenLine,
   PenTool,
+  Plus,
   Redo2,
   RotateCcw,
   ScrollText,
   Trash2,
   Undo2,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -101,6 +103,34 @@ const DEFAULT_SIG_LAYOUT: SigLayoutState = {
   useThaiNumeralDate: true,
   showSignatureOnDoc: true,
 };
+
+interface SigPlacement {
+  id: string;
+  pageNumber: number;
+  x: number; // mm (0..210)
+  y: number; // mm
+  w: number; // mm
+  h: number; // mm
+}
+
+function buildPlacementForPage(
+  targetPage: number,
+  baseLayout: SigLayoutState,
+  existingOnDoc: SigPlacement[]
+): SigPlacement {
+  const samePageCount = existingOnDoc.filter((s) => s.pageNumber === targetPage).length;
+  const offset = (samePageCount % 4) * 14;
+  const nextX = Math.max(4, Math.min(165, baseLayout.x - offset));
+  const nextY = Math.max(4, Math.min(262, baseLayout.y - offset));
+  return {
+    id: `sig_${targetPage}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    pageNumber: targetPage,
+    x: nextX,
+    y: nextY,
+    w: baseLayout.sigWidthMm,
+    h: baseLayout.showSignerCaption ? 24 : 14,
+  };
+}
 
 interface StrokePoint {
   xMm: number;
@@ -385,7 +415,10 @@ export function DirectorStampCanvas({
   const [pageInput, setPageInput] = useState("1");
   const isEditingPageInputRef = useRef(false);
 
-  const [sigPageNumber, setSigPageNumber] = useState(1);
+  const [sigPlacements, setSigPlacements] = useState<SigPlacement[]>([]);
+  const sigPlacementsRef = useRef<SigPlacement[]>([]);
+  const [selectedSigId, setSelectedSigId] = useState<string | null>(null);
+  const selectedSigIdRef = useRef<string | null>(null);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
@@ -399,7 +432,8 @@ export function DirectorStampCanvas({
   const [zoomPercent, setZoomPercent] = useState(100);
   const [isFullscreenWorkspace, setIsFullscreenWorkspace] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [ipadPencilOnly, setIpadPencilOnly] = useState(false);
+  // ติ๊กโหมดปากกา iPad อัตโนมัติตลอดเวลา (Apple Pencil เขียนได้ทันที / นิ้วแตะเลื่อนหน้า / เมาส์ใช้งานได้ปกติ)
+  const [ipadPencilOnly, setIpadPencilOnly] = useState(true);
   const [toolbarCollapseSignal, setToolbarCollapseSignal] = useState(0);
 
   // โหมดการใช้งานบนกระดาษ: "move-sig" = ย้ายลายเซ็น, "pen" = ปากกา, "highlighter" = ไฮไลต์, "eraser" = ยางลบ, "pan" = เลื่อนกระดาษ
@@ -444,7 +478,9 @@ export function DirectorStampCanvas({
 
   const [layout, setLayout] = useState<SigLayoutState>(DEFAULT_SIG_LAYOUT);
   const layoutRef = useRef<SigLayoutState>(DEFAULT_SIG_LAYOUT);
-  const dragSigRef = useRef<{ page: number; dx: number; dy: number } | null>(null);
+  const dragSigRef = useRef<{ id: string; page: number; dx: number; dy: number } | null>(
+    null
+  );
 
   const getPageHeightPx = useCallback((pNum: number) => {
     return pageHeightsRef.current[pNum] || defaultPageHeightRef.current;
@@ -459,6 +495,14 @@ export function DirectorStampCanvas({
   }, [layout]);
 
   useEffect(() => {
+    sigPlacementsRef.current = sigPlacements;
+  }, [sigPlacements]);
+
+  useEffect(() => {
+    selectedSigIdRef.current = selectedSigId;
+  }, [selectedSigId]);
+
+  useEffect(() => {
     strokesByPageRef.current = strokesByPage;
   }, [strokesByPage]);
 
@@ -469,7 +513,11 @@ export function DirectorStampCanvas({
       const savedLayout = localStorage.getItem(STORAGE_SIG_LAYOUT_KEY);
       if (savedLayout) {
         const parsed = JSON.parse(savedLayout);
-        setLayout((prev) => ({ ...prev, ...parsed }));
+        setLayout((prev) => {
+          const merged = { ...prev, ...parsed };
+          layoutRef.current = merged;
+          return merged;
+        });
       }
     } catch {
       // ignore storage errors
@@ -499,73 +547,86 @@ export function DirectorStampCanvas({
         }
       }
 
-      // 2. วาดลายเซ็น ผอ.
-      if (!cur.showSignatureOnDoc || targetPage !== sigPageNumber) {
+      // 2. วาดลายเซ็น ผอ. ทุกจุดที่กำหนดไว้ในหน้านี้ (รองรับหลายจุด / หลายหน้า)
+      if (!cur.showSignatureOnDoc) {
+        return;
+      }
+      const pageSigs = sigPlacementsRef.current.filter(
+        (s) => s.pageNumber === targetPage
+      );
+      if (pageSigs.length === 0) {
         return;
       }
 
-      ctx.save();
-      ctx.fillStyle = BLUE_INK;
-      ctx.strokeStyle = BLUE_INK;
-      ctx.textBaseline = "top";
-
-      const sx = cur.x * k;
-      const sy = cur.y * k;
-      const sw = cur.sigWidthMm * k;
-      let currentY = sy;
-
-      if (sigImageRef.current) {
-        const img = sigImageRef.current;
-        const sh = (img.height / Math.max(1, img.width)) * sw;
-        ctx.drawImage(img, sx, currentY, sw, sh);
-        currentY += sh + 4;
-        cur.w = cur.sigWidthMm;
-        cur.h = sh / k + (cur.showSignerCaption ? 20 : 2);
-      } else {
-        cur.w = cur.sigWidthMm;
-        cur.h = cur.showSignerCaption ? 24 : 14;
-      }
-
-      if (cur.showSignerCaption) {
-        const pt = 4.1 * k;
-        const lh = pt * 1.38;
-        ctx.font = `600 ${pt}px 'TH Sarabun New', Sarabun, sans-serif`;
-        ctx.textAlign = "center";
-        const centerX = sx + sw / 2;
-
-        if (signerName.trim()) {
-          ctx.fillText(`(${signerName.trim()})`, centerX, currentY);
-          currentY += lh;
-        }
-        if (signerTitle.trim()) {
-          ctx.fillText(signerTitle.trim(), centerX, currentY);
-          currentY += lh;
-        }
-        const dateStr = formatThaiFullDate(signDateIso, cur.useThaiNumeralDate);
-        if (dateStr) {
-          ctx.fillText(dateStr, centerX, currentY);
-        }
-        ctx.textAlign = "left";
-      }
-
-      if (showGuides) {
+      for (const sig of pageSigs) {
         ctx.save();
-        ctx.strokeStyle =
-          toolMode === "move-sig" ? "rgba(219, 39, 119, 0.78)" : "rgba(148, 163, 184, 0.5)";
-        ctx.setLineDash([6, 5]);
-        ctx.lineWidth = 2;
-        ctx.strokeRect(sx - 5, sy - 5, cur.w * k + 10, cur.h * k + 10);
-        if (!sigImageRef.current) {
-          ctx.fillStyle = "rgba(219, 39, 119, 0.85)";
-          ctx.font = `600 22px Sarabun, sans-serif`;
-          ctx.fillText("กรอบลายเซ็น ผอ. (ลากย้ายได้)", sx + 8, sy + 12);
+        ctx.fillStyle = BLUE_INK;
+        ctx.strokeStyle = BLUE_INK;
+        ctx.textBaseline = "top";
+
+        const sx = sig.x * k;
+        const sy = sig.y * k;
+        const sw = cur.sigWidthMm * k;
+        let currentY = sy;
+
+        if (sigImageRef.current) {
+          const img = sigImageRef.current;
+          const sh = (img.height / Math.max(1, img.width)) * sw;
+          ctx.drawImage(img, sx, currentY, sw, sh);
+          currentY += sh + 4;
+          sig.w = cur.sigWidthMm;
+          sig.h = sh / k + (cur.showSignerCaption ? 20 : 2);
+        } else {
+          sig.w = cur.sigWidthMm;
+          sig.h = cur.showSignerCaption ? 24 : 14;
         }
+
+        if (cur.showSignerCaption) {
+          const pt = 4.1 * k;
+          const lh = pt * 1.38;
+          ctx.font = `600 ${pt}px 'TH Sarabun New', Sarabun, sans-serif`;
+          ctx.textAlign = "center";
+          const centerX = sx + sw / 2;
+
+          if (signerName.trim()) {
+            ctx.fillText(`(${signerName.trim()})`, centerX, currentY);
+            currentY += lh;
+          }
+          if (signerTitle.trim()) {
+            ctx.fillText(signerTitle.trim(), centerX, currentY);
+            currentY += lh;
+          }
+          const dateStr = formatThaiFullDate(signDateIso, cur.useThaiNumeralDate);
+          if (dateStr) {
+            ctx.fillText(dateStr, centerX, currentY);
+          }
+          ctx.textAlign = "left";
+        }
+
+        if (showGuides) {
+          const isSelected = sig.id === selectedSigIdRef.current;
+          ctx.save();
+          ctx.strokeStyle =
+            toolMode === "move-sig"
+              ? isSelected
+                ? "rgba(219, 39, 119, 0.92)"
+                : "rgba(99, 102, 241, 0.72)"
+              : "rgba(148, 163, 184, 0.5)";
+          ctx.setLineDash([6, 5]);
+          ctx.lineWidth = isSelected && toolMode === "move-sig" ? 2.5 : 2;
+          ctx.strokeRect(sx - 5, sy - 5, sig.w * k + 10, sig.h * k + 10);
+          if (!sigImageRef.current) {
+            ctx.fillStyle = "rgba(219, 39, 119, 0.85)";
+            ctx.font = `600 22px Sarabun, sans-serif`;
+            ctx.fillText("กรอบลายเซ็น ผอ. (ลากย้ายได้)", sx + 8, sy + 12);
+          }
+          ctx.restore();
+        }
+
         ctx.restore();
       }
-
-      ctx.restore();
     },
-    [sigPageNumber, signDateIso, signerName, signerTitle, toolMode]
+    [signDateIso, signerName, signerTitle, toolMode]
   );
 
   const redrawPageCanvas = useCallback(
@@ -699,7 +760,15 @@ export function DirectorStampCanvas({
         setPageNumber(1);
         pageNumberRef.current = 1;
         setPageInput("1");
-        setSigPageNumber(pdf.numPages);
+        const initialPlacement = buildPlacementForPage(
+          pdf.numPages,
+          layoutRef.current,
+          []
+        );
+        sigPlacementsRef.current = [initialPlacement];
+        setSigPlacements([initialPlacement]);
+        selectedSigIdRef.current = initialPlacement.id;
+        setSelectedSigId(initialPlacement.id);
         setPageDimsVersion((v) => v + 1);
       } catch (err: any) {
         if (!cancelled) {
@@ -814,7 +883,8 @@ export function DirectorStampCanvas({
   }, [
     layout,
     strokesByPage,
-    sigPageNumber,
+    sigPlacements,
+    selectedSigId,
     signDateIso,
     toolMode,
     viewMode,
@@ -940,7 +1010,9 @@ export function DirectorStampCanvas({
       }
 
       if (cur.showSignatureOnDoc && (sigImageRef.current || cur.showSignerCaption)) {
-        pagesToExport.add(sigPageNumber);
+        for (const sig of sigPlacementsRef.current) {
+          pagesToExport.add(sig.pageNumber);
+        }
       }
 
       if (pagesToExport.size === 0) return null;
@@ -963,13 +1035,13 @@ export function DirectorStampCanvas({
 
       return {
         overlays,
-        pageNumber: sigPageNumber,
+        pageNumber: sigPlacementsRef.current[0]?.pageNumber || pageNumberRef.current,
       };
     };
 
     onBindExporter(exporter);
     return () => onBindExporter(null);
-  }, [drawPageOverlay, getPageHeightPx, onBindExporter, sigPageNumber]);
+  }, [drawPageOverlay, getPageHeightPx, onBindExporter]);
 
   const saveLayoutToStorage = (next: SigLayoutState) => {
     try {
@@ -977,6 +1049,59 @@ export function DirectorStampCanvas({
     } catch {
       // ignore
     }
+  };
+
+  const addSignatureToPage = (targetPage: number) => {
+    if (!layoutRef.current.showSignatureOnDoc) {
+      const nextLayout = { ...layoutRef.current, showSignatureOnDoc: true };
+      layoutRef.current = nextLayout;
+      setLayout(nextLayout);
+      saveLayoutToStorage(nextLayout);
+    }
+    const created = buildPlacementForPage(
+      targetPage,
+      layoutRef.current,
+      sigPlacementsRef.current
+    );
+    const nextList = [...sigPlacementsRef.current, created];
+    sigPlacementsRef.current = nextList;
+    setSigPlacements(nextList);
+    selectedSigIdRef.current = created.id;
+    setSelectedSigId(created.id);
+    setToolMode("move-sig");
+    redrawPageCanvas(targetPage);
+  };
+
+  const removeSignaturePlacement = (sigId: string) => {
+    const target = sigPlacementsRef.current.find((s) => s.id === sigId);
+    const nextList = sigPlacementsRef.current.filter((s) => s.id !== sigId);
+    sigPlacementsRef.current = nextList;
+    setSigPlacements(nextList);
+    if (selectedSigIdRef.current === sigId) {
+      const fallbackId = nextList[0]?.id ?? null;
+      selectedSigIdRef.current = fallbackId;
+      setSelectedSigId(fallbackId);
+    }
+    if (target) {
+      redrawPageCanvas(target.pageNumber);
+    }
+  };
+
+  const removeSignaturesOnPage = (targetPage: number) => {
+    const nextList = sigPlacementsRef.current.filter(
+      (s) => s.pageNumber !== targetPage
+    );
+    sigPlacementsRef.current = nextList;
+    setSigPlacements(nextList);
+    if (
+      selectedSigIdRef.current &&
+      !nextList.some((s) => s.id === selectedSigIdRef.current)
+    ) {
+      const fallbackId = nextList[0]?.id ?? null;
+      selectedSigIdRef.current = fallbackId;
+      setSelectedSigId(fallbackId);
+    }
+    redrawPageCanvas(targetPage);
   };
 
   const clientCoordsToMm = (
@@ -1089,18 +1214,31 @@ export function DirectorStampCanvas({
     }
 
     const cur = layoutRef.current;
-    const inSigBox =
-      cur.showSignatureOnDoc &&
-      targetPage === sigPageNumber &&
-      x >= cur.x - 6 &&
-      x <= cur.x + cur.w + 6 &&
-      y >= cur.y - 6 &&
-      y <= cur.y + cur.h + 6;
-
-    if (inSigBox) {
-      dragSigRef.current = { page: targetPage, dx: x - cur.x, dy: y - cur.y };
-      e.currentTarget.setPointerCapture(e.pointerId);
-      return;
+    if (cur.showSignatureOnDoc) {
+      const pageSigs = sigPlacementsRef.current.filter(
+        (s) => s.pageNumber === targetPage
+      );
+      for (let i = pageSigs.length - 1; i >= 0; i--) {
+        const sig = pageSigs[i];
+        if (
+          x >= sig.x - 6 &&
+          x <= sig.x + sig.w + 6 &&
+          y >= sig.y - 6 &&
+          y <= sig.y + sig.h + 6
+        ) {
+          selectedSigIdRef.current = sig.id;
+          setSelectedSigId(sig.id);
+          dragSigRef.current = {
+            id: sig.id,
+            page: targetPage,
+            dx: x - sig.x,
+            dy: y - sig.y,
+          };
+          e.currentTarget.setPointerCapture(e.pointerId);
+          redrawPageCanvas(targetPage);
+          return;
+        }
+      }
     }
 
     // นอกกรอบลายเซ็น: ให้ลาก/แตะเลื่อนกระดาษได้โดยไม่เผลอย้ายลายเซ็นข้ามหน้าโดยไม่ตั้งใจ
@@ -1174,16 +1312,16 @@ export function DirectorStampCanvas({
     }
 
     if (!dragSigRef.current) return;
-    const { page: sigTargetPage, dx, dy } = dragSigRef.current;
+    const { id: sigId, page: sigTargetPage, dx, dy } = dragSigRef.current;
     const [x, y] = clientCoordsToMm(e.clientX, e.clientY, sigTargetPage);
     const nextX = Math.max(2, Math.min(195, x - dx));
     const nextY = Math.max(2, Math.min(285, y - dy));
 
-    setLayout((prev) => {
-      const updated = { ...prev, x: nextX, y: nextY };
-      layoutRef.current = updated;
-      return updated;
-    });
+    const updatedList = sigPlacementsRef.current.map((s) =>
+      s.id === sigId ? { ...s, x: nextX, y: nextY } : s
+    );
+    sigPlacementsRef.current = updatedList;
+    setSigPlacements(updatedList);
   };
 
   const handlePointerUp = () => {
@@ -1229,8 +1367,21 @@ export function DirectorStampCanvas({
     }
 
     if (dragSigRef.current) {
+      const draggedId = dragSigRef.current.id;
       dragSigRef.current = null;
-      saveLayoutToStorage(layoutRef.current);
+      const movedSig = sigPlacementsRef.current.find((s) => s.id === draggedId);
+      if (movedSig) {
+        const nextLayout = {
+          ...layoutRef.current,
+          x: movedSig.x,
+          y: movedSig.y,
+        };
+        layoutRef.current = nextLayout;
+        setLayout(nextLayout);
+        saveLayoutToStorage(nextLayout);
+      } else {
+        saveLayoutToStorage(layoutRef.current);
+      }
     }
   };
 
@@ -1376,6 +1527,15 @@ export function DirectorStampCanvas({
   };
 
   const currentPageStrokeCount = (strokesByPage[pageNumber] || []).length;
+  const sigsOnCurrentPage = sigPlacements.filter((s) => s.pageNumber === pageNumber);
+  const sigPageSummaries = Array.from(
+    sigPlacements.reduce((acc, s) => {
+      acc.set(s.pageNumber, (acc.get(s.pageNumber) || 0) + 1);
+      return acc;
+    }, new Map<number, number>())
+  )
+    .sort((a, b) => a[0] - b[0])
+    .map(([pNum, count]) => ({ pageNumber: pNum, count }));
   const canUndo = strokeHistory.past.length > 0;
   const canRedo = strokeHistory.future.length > 0;
   const baseDisplayWidth = isFullscreenWorkspace
@@ -1417,6 +1577,9 @@ export function DirectorStampCanvas({
       viewMode === "single"
         ? pNum === pageNumber
         : Math.abs(pNum - pageNumber) <= 3;
+    const sigCountForSlot = layout.showSignatureOnDoc
+      ? sigPlacements.filter((s) => s.pageNumber === pNum).length
+      : 0;
 
     return (
       <div
@@ -1436,9 +1599,9 @@ export function DirectorStampCanvas({
             <span>
               หน้า {pNum} / {totalPages}
             </span>
-            {layout.showSignatureOnDoc && pNum === sigPageNumber && (
+            {sigCountForSlot > 0 && (
               <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-bold">
-                หน้าลายเซ็น ผอ.
+                มีลายเซ็น ผอ.{sigCountForSlot > 1 ? ` (${sigCountForSlot} จุด)` : ""}
               </span>
             )}
           </div>
@@ -1596,16 +1759,16 @@ export function DirectorStampCanvas({
               />
               <span>ลายเซ็น ผอ. (จำไว้ใช้อัตโนมัติ)</span>
             </label>
-            <div className="flex items-center gap-2">
-              {pageNumber !== sigPageNumber && layout.showSignatureOnDoc && (
-                <button
-                  type="button"
-                  onClick={() => setSigPageNumber(pageNumber)}
-                  className="text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200"
-                >
-                  ย้ายลายเซ็นมาหน้า {pageNumber}
-                </button>
-              )}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => addSignatureToPage(pageNumber)}
+                className="text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200 inline-flex items-center gap-1"
+                title="วางลายเซ็น ผอ. เพิ่มอีกจุดลงบนหน้านี้ (ยังคงจุดที่วางไว้ในหน้าอื่น)"
+              >
+                <Plus className="w-3 h-3" />
+                <span>เพิ่มลายเซ็นหน้า {pageNumber}</span>
+              </button>
               {sigDataUrl && (
                 <button
                   type="button"
@@ -1706,21 +1869,77 @@ export function DirectorStampCanvas({
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500">
-            <span>
-              หน้าที่มีลายเซ็น: <b>หน้า {sigPageNumber}</b> / {totalPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setLayout(DEFAULT_SIG_LAYOUT);
-                saveLayoutToStorage(DEFAULT_SIG_LAYOUT);
-              }}
-              className="text-slate-600 hover:text-indigo-700 inline-flex items-center gap-1"
-            >
-              <RotateCcw className="w-3 h-3" />
-              รีเซ็ตตำแหน่งลายเซ็น
-            </button>
+          <div className="space-y-1.5 pt-1 text-[11px] text-slate-600 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span>
+                จุดลายเซ็นทั้งหมด:{" "}
+                <b className="text-indigo-700">{sigPlacements.length} จุด</b> (
+                {sigPageSummaries.length} หน้า)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  layoutRef.current = DEFAULT_SIG_LAYOUT;
+                  setLayout(DEFAULT_SIG_LAYOUT);
+                  saveLayoutToStorage(DEFAULT_SIG_LAYOUT);
+                  if (sigPlacementsRef.current.length === 0) {
+                    addSignatureToPage(pageNumber);
+                  } else {
+                    const targetId =
+                      selectedSigIdRef.current || sigPlacementsRef.current[0].id;
+                    const updated = sigPlacementsRef.current.map((s) =>
+                      s.id === targetId
+                        ? { ...s, x: DEFAULT_SIG_LAYOUT.x, y: DEFAULT_SIG_LAYOUT.y }
+                        : s
+                    );
+                    sigPlacementsRef.current = updated;
+                    setSigPlacements(updated);
+                  }
+                }}
+                className="text-slate-600 hover:text-indigo-700 inline-flex items-center gap-1"
+              >
+                <RotateCcw className="w-3 h-3" />
+                รีเซ็ตตำแหน่งลายเซ็น
+              </button>
+            </div>
+            {sigPlacements.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {sigPlacements.map((sig, idx) => (
+                  <div
+                    key={sig.id}
+                    className={`inline-flex items-center rounded-lg border text-[10px] font-bold overflow-hidden ${
+                      sig.id === selectedSigId
+                        ? "border-pink-400 bg-pink-50 text-pink-800"
+                        : sig.pageNumber === pageNumber
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-800"
+                        : "border-slate-200 bg-slate-50 text-slate-700"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        selectedSigIdRef.current = sig.id;
+                        setSelectedSigId(sig.id);
+                        setToolMode("move-sig");
+                        goToPage(sig.pageNumber);
+                      }}
+                      title={`กระโดดไปจุดลายเซ็นที่ ${idx + 1} (หน้า ${sig.pageNumber})`}
+                      className="px-1.5 py-0.5 hover:bg-white/60"
+                    >
+                      หน้า {sig.pageNumber}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeSignaturePlacement(sig.id)}
+                      title={`ลบจุดลายเซ็นหน้า ${sig.pageNumber}`}
+                      className="px-1 py-0.5 text-rose-500 hover:bg-rose-100 hover:text-rose-700"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1936,38 +2155,68 @@ export function DirectorStampCanvas({
             </div>
           </div>
 
-          {/* แถบเลื่อนข้ามหน้าด่วน & ปุ่มกระโดดไปหน้าลายเซ็น */}
-          {(totalPages > 1 || (layout.showSignatureOnDoc && pageNumber !== sigPageNumber)) && (
-            <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-slate-100">
-              {totalPages > 1 && (
-                <div className="flex-1 min-w-[160px] flex items-center gap-2">
-                  <span className="text-[10px] font-semibold text-slate-400">1</span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={totalPages}
-                    value={pageNumber}
-                    disabled={loadingPdf}
-                    onChange={(e) => goToPage(Number(e.target.value))}
-                    aria-label="เลื่อนเลือกหน้าเอกสาร"
-                    className="w-full h-1.5 accent-indigo-600 cursor-pointer"
-                  />
-                  <span className="text-[10px] font-semibold text-slate-400">{totalPages}</span>
-                </div>
-              )}
+          {/* แถบเลื่อนข้ามหน้าด่วน & ปุ่มเพิ่ม/จัดการลายเซ็นหลายหน้า */}
+          <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-slate-100">
+            {totalPages > 1 && (
+              <div className="flex-1 min-w-[140px] flex items-center gap-2">
+                <span className="text-[10px] font-semibold text-slate-400">1</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={totalPages}
+                  value={pageNumber}
+                  disabled={loadingPdf}
+                  onChange={(e) => goToPage(Number(e.target.value))}
+                  aria-label="เลื่อนเลือกหน้าเอกสาร"
+                  className="w-full h-1.5 accent-indigo-600 cursor-pointer"
+                />
+                <span className="text-[10px] font-semibold text-slate-400">{totalPages}</span>
+              </div>
+            )}
 
-              {layout.showSignatureOnDoc && pageNumber !== sigPageNumber && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                disabled={loadingPdf}
+                onClick={() => addSignatureToPage(pageNumber)}
+                className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-40"
+                title="วางลายเซ็น ผอ. ลงในหน้าปัจจุบัน (สามารถวางได้หลายหน้าและหลายจุด)"
+              >
+                <Plus className="w-3 h-3" />
+                <span>เพิ่มลายเซ็นหน้า {pageNumber}</span>
+              </button>
+
+              {sigsOnCurrentPage.length > 0 && layout.showSignatureOnDoc && (
                 <button
                   type="button"
-                  onClick={() => goToPage(sigPageNumber)}
-                  className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold inline-flex items-center gap-1"
+                  onClick={() => removeSignaturesOnPage(pageNumber)}
+                  className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold inline-flex items-center gap-1"
+                  title={`ลบลายเซ็นทั้งหมดในหน้า ${pageNumber}`}
                 >
-                  <LocateFixed className="w-3 h-3" />
-                  <span>ไปหน้าลายเซ็น (หน้า {sigPageNumber})</span>
+                  <X className="w-3 h-3" />
+                  <span>เอาลายเซ็นหน้านี้ออก</span>
                 </button>
               )}
+
+              {layout.showSignatureOnDoc &&
+                sigPageSummaries
+                  .filter((item) => item.pageNumber !== pageNumber)
+                  .map((item) => (
+                    <button
+                      key={item.pageNumber}
+                      type="button"
+                      onClick={() => goToPage(item.pageNumber)}
+                      className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 text-[11px] font-bold inline-flex items-center gap-1"
+                    >
+                      <LocateFixed className="w-3 h-3" />
+                      <span>
+                        หน้า {item.pageNumber}
+                        {item.count > 1 ? ` (${item.count})` : ""}
+                      </span>
+                    </button>
+                  ))}
             </div>
-          )}
+          </div>
         </div>
 
         {loadingPdf && (
