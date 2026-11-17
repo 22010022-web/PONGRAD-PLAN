@@ -4,13 +4,17 @@ import {
   BannerDisplaySettings,
   BannerItem,
   DEFAULT_BANNER_SETTINGS,
+  DEFAULT_PORTAL_SETTINGS,
   NewsItem,
   normalizeBannerSettings,
+  normalizePortalSettings,
+  PortalDisplaySettings,
 } from "@/types/cms";
 
 const CMS_NEWS_ROW_ID = "cms_news_v1";
 const CMS_BANNERS_ROW_ID = "cms_banners_v1";
 const CMS_BANNER_SETTINGS_ROW_ID = "cms_banner_settings_v1";
+const CMS_PORTAL_SETTINGS_ROW_ID = "cms_portal_settings_v1";
 export const CMS_MEDIA_BUCKET = "cms-media";
 
 export function createPublicSupabase(): SupabaseClient | null {
@@ -97,6 +101,26 @@ export async function writeBannerSettings(
 ): Promise<BannerDisplaySettings> {
   const normalized = normalizeBannerSettings(settings);
   await writeStoredJson(client, CMS_BANNER_SETTINGS_ROW_ID, normalized);
+  return normalized;
+}
+
+export async function readPortalSettings(
+  client: SupabaseClient | null
+): Promise<PortalDisplaySettings> {
+  const raw = await readStoredJson<Partial<PortalDisplaySettings> | null>(
+    client,
+    CMS_PORTAL_SETTINGS_ROW_ID,
+    DEFAULT_PORTAL_SETTINGS
+  );
+  return normalizePortalSettings(raw);
+}
+
+export async function writePortalSettings(
+  client: SupabaseClient,
+  settings: Partial<PortalDisplaySettings>
+): Promise<PortalDisplaySettings> {
+  const normalized = normalizePortalSettings(settings);
+  await writeStoredJson(client, CMS_PORTAL_SETTINGS_ROW_ID, normalized);
   return normalized;
 }
 

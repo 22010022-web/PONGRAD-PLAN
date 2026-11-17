@@ -9,7 +9,9 @@ import {
   BannerDisplaySettings,
   BannerItem,
   DEFAULT_BANNER_SETTINGS,
+  DEFAULT_PORTAL_SETTINGS,
   NewsItem,
+  PortalDisplaySettings,
 } from "@/types/cms";
 import { HomeBannerCarousel, HomeNewsSection } from "@/components/home-showcase";
 import { FileText, CheckCircle2, Clock, FileCheck, LogIn, Loader2, BookOpen } from "lucide-react";
@@ -27,6 +29,8 @@ export default function DashboardPage() {
   const [banners, setBanners] = useState<BannerItem[]>([]);
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [bannerSettings, setBannerSettings] = useState<BannerDisplaySettings>(DEFAULT_BANNER_SETTINGS);
+  const [portalSettings, setPortalSettings] = useState<PortalDisplaySettings>(DEFAULT_PORTAL_SETTINGS);
+  const [cmsLoaded, setCmsLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [filterTeacher, setFilterTeacher] = useState("");
   const [filterSubject, setFilterSubject] = useState("");
@@ -39,6 +43,7 @@ export default function DashboardPage() {
       return;
     }
     let cancelled = false;
+    setCmsLoaded(false);
     fetch("/api/cms", { cache: "no-store" })
       .then((res) => res.json())
       .then((data) => {
@@ -46,9 +51,13 @@ export default function DashboardPage() {
         if (Array.isArray(data?.banners)) setBanners(data.banners);
         if (Array.isArray(data?.news)) setNewsList(data.news);
         if (data?.bannerSettings) setBannerSettings(data.bannerSettings);
+        if (data?.portalSettings) setPortalSettings(data.portalSettings);
       })
       .catch(() => {
         // ignore cms fetch errors cleanly
+      })
+      .finally(() => {
+        if (!cancelled) setCmsLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -57,12 +66,14 @@ export default function DashboardPage() {
 
   const linkedTeacherId = profile?.teacher_id || teacher?.id || null;
   const hasLinkedTeacherRow = Boolean(linkedTeacherId && !linkedTeacherId.startsWith("00000000-"));
+  const isPublicDashboardActive = !user && portalSettings.showPublicDashboard;
+  const showCombinedDashboard = Boolean((user && isAdmin) || isPublicDashboardActive);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadData() {
-      if (authLoading) {
+      if (authLoading || (!user && !cmsLoaded)) {
         setIsLoading(true);
         return;
       }
@@ -72,8 +83,8 @@ export default function DashboardPage() {
         return;
       }
 
-      // ยังไม่เข้าสู่ระบบ: ไม่ดึงข้อมูลแผนรายบุคคลขึ้นมาแสดงเพื่อความเป็นส่วนตัว
-      if (!user) {
+      // ยังไม่เข้าสู่ระบบและปิดการแสดงแดชบอร์ดแบบรวม: ไม่ดึงข้อมูลแผนมาแสดง
+      if (!user && !portalSettings.showPublicDashboard) {
         setPlans([]);
         setTeachers([]);
         setFilterTeacher("");
@@ -94,7 +105,8 @@ export default function DashboardPage() {
           .eq("is_active", true)
           .order("display_order", { ascending: true });
 
-        if (!isAdmin) {
+        const personalOnly = Boolean(user && !isAdmin);
+        if (personalOnly && user) {
           if (hasLinkedTeacherRow && linkedTeacherId) {
             plansQuery = plansQuery.or(`created_by.eq.${user.id},teacher_id.eq.${linkedTeacherId}`);
             teachersQuery = teachersQuery.eq("id", linkedTeacherId);
@@ -105,7 +117,7 @@ export default function DashboardPage() {
 
         const [plansRes, teachersRes] = await Promise.all([
           plansQuery,
-          !isAdmin && !hasLinkedTeacherRow
+          personalOnly && !hasLinkedTeacherRow
             ? Promise.resolve({ data: [] as Teacher[] })
             : teachersQuery,
         ]);
@@ -124,7 +136,15 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user, isAdmin, linkedTeacherId, hasLinkedTeacherRow]);
+  }, [
+    authLoading,
+    user,
+    isAdmin,
+    cmsLoaded,
+    portalSettings.showPublicDashboard,
+    linkedTeacherId,
+    hasLinkedTeacherRow,
+  ]);
 
   const totalPlans = plans.length;
   const approvedPlans = plans.filter(p => p.status === "เสร็จสมบูรณ์" || p.status === "แผนผ่าน (รอส่งบันทึก)" || p.status === "รอตรวจบันทึก").length;
@@ -141,7 +161,7 @@ export default function DashboardPage() {
   const personalDisplayName =
     teacher?.name || profile?.full_name || user?.email || "ครูผู้สอน";
 
-  const summaryTeachers: Teacher[] = isAdmin
+  const summaryTeachers: Teacher[] = showCombinedDashboard
     ? teachers
     : teachers.length > 0
       ? teachers
@@ -159,7 +179,7 @@ export default function DashboardPage() {
 
   const filteredPlans = sortPlansByDate(
     plans.filter((p) => {
-      if (isAdmin && filterTeacher && p.teacher_name !== filterTeacher) return false;
+      if (showCombinedDashboard && filterTeacher && p.teacher_name !== filterTeacher) return false;
       if (filterSubject && p.subject !== filterSubject) return false;
       if (filterScope && p.scope_type !== filterScope) return false;
       if (filterStatus && p.status !== filterStatus) return false;
@@ -246,12 +266,12 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {authLoading || isLoading ? (
+      {authLoading || isLoading || (!user && !cmsLoaded) ? (
         <div className="glass-card rounded-3xl p-12 text-center border border-white/80">
           <Loader2 className="w-8 h-8 animate-spin text-pink-600 mx-auto mb-3" />
           <p className="text-sm font-semibold text-slate-600">กำลังโหลดข้อมูลแดชบอร์ด...</p>
         </div>
-      ) : !user ? (
+      ) : !user && !portalSettings.showPublicDashboard ? (
         <>
           {/* Hero Banner Carousel (แสดงเฉพาะหน้าแรกก่อนเข้าสู่ระบบ) */}
           <HomeBannerCarousel banners={banners} bannerSettings={bannerSettings} />
@@ -283,13 +303,16 @@ export default function DashboardPage() {
         </>
       ) : (
         <>
+          {/* แบนเนอร์สไลด์ (กรณีหน้าแรกเปิดแสดงแดชบอร์ดรวมโดยยังไม่เข้าสู่ระบบ) */}
+          {!user && <HomeBannerCarousel banners={banners} bannerSettings={bannerSettings} />}
+
           {/* KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="glass-card rounded-2xl p-5 border-l-4 border-l-pink-600">
           <div className="flex justify-between items-start">
             <div>
               <p className="text-xs font-semibold text-slate-500">
-                {isAdmin ? "แผนที่ส่งทั้งหมด" : "แผนที่ส่งทั้งหมด (ของฉัน)"}
+                {showCombinedDashboard ? "แผนที่ส่งทั้งหมด" : "แผนที่ส่งทั้งหมด (ของฉัน)"}
               </p>
               <h3 className="text-2xl sm:text-3xl font-extrabold text-pink-700 mt-1">{totalPlans}</h3>
             </div>
@@ -353,7 +376,7 @@ export default function DashboardPage() {
         <div className="flex justify-between items-center mb-4">
           <h2 className="font-display font-bold text-base sm:text-lg text-slate-800 flex items-center gap-2">
             <span className="w-2.5 h-6 rounded-full bg-gradient-to-b from-pink-600 to-amber-500"></span>
-            {isAdmin
+            {showCombinedDashboard
               ? `ตารางสรุปภาระงานและความคืบหน้ารายบุคคล (คณะครู ${summaryTeachers.length} ท่าน)`
               : `สรุปภาระงานและความคืบหน้าของฉัน (${personalDisplayName})`}
           </h2>
@@ -375,7 +398,7 @@ export default function DashboardPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {summaryTeachers.map((t) => {
-                const tPlans = isAdmin
+                const tPlans = showCombinedDashboard
                   ? plans.filter((p) => p.teacher_id === t.id || p.teacher_name === t.name)
                   : plans;
                 const tTerm = tPlans.filter(p => p.scope_type === 'term').length;
@@ -437,11 +460,11 @@ export default function DashboardPage() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
           <h2 className="font-display font-bold text-base sm:text-lg text-slate-800 flex items-center gap-2">
             <span className="w-2.5 h-6 rounded-full bg-gradient-to-b from-purple-600 to-pink-600"></span>
-            {isAdmin ? "ประวัติการส่งแผนการจัดการเรียนรู้ล่าสุด" : "ประวัติการส่งแผนการจัดการเรียนรู้ของฉัน"}
+            {showCombinedDashboard ? "ประวัติการส่งแผนการจัดการเรียนรู้ล่าสุด" : "ประวัติการส่งแผนการจัดการเรียนรู้ของฉัน"}
           </h2>
 
           <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-            {isAdmin && (
+            {showCombinedDashboard && (
               <select
                 value={filterTeacher}
                 onChange={(e) => setFilterTeacher(e.target.value)}
@@ -591,6 +614,9 @@ export default function DashboardPage() {
           </table>
         </div>
       </div>
+
+          {/* ข่าวสารประชาสัมพันธ์ (กรณีเปิดแสดงแดชบอร์ดรวมหน้าแรกก่อนเข้าสู่ระบบ) */}
+          {!user && <HomeNewsSection news={newsList} />}
         </>
       )}
     </div>

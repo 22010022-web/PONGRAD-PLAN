@@ -5,9 +5,11 @@ import {
   readAllBanners,
   readAllNews,
   readBannerSettings,
+  readPortalSettings,
   writeAllBanners,
   writeAllNews,
   writeBannerSettings,
+  writePortalSettings,
 } from "@/lib/cms-storage";
 import {
   BannerItem,
@@ -39,10 +41,11 @@ export async function GET(req: Request) {
   try {
     const authed = await requireUser(req, { admin: true });
     const client = createAdminSupabase() || authed.supabase;
-    const [banners, news, bannerSettings] = await Promise.all([
+    const [banners, news, bannerSettings, portalSettings] = await Promise.all([
       readAllBanners(client),
       readAllNews(client),
       readBannerSettings(client),
+      readPortalSettings(client),
     ]);
 
     return NextResponse.json(
@@ -50,6 +53,7 @@ export async function GET(req: Request) {
         banners: sortAllBannersForAdmin(banners),
         news: sortAllNewsForAdmin(news),
         bannerSettings,
+        portalSettings,
       },
       { headers: { "Cache-Control": "no-store" } }
     );
@@ -210,6 +214,11 @@ export async function POST(req: Request) {
     if (action === "save-banner-settings") {
       const savedSettings = await writeBannerSettings(client, body?.settings || {});
       return NextResponse.json({ success: true, bannerSettings: savedSettings });
+    }
+
+    if (action === "save-portal-settings") {
+      const savedPortal = await writePortalSettings(client, body?.settings || {});
+      return NextResponse.json({ success: true, portalSettings: savedPortal });
     }
 
     throw new HttpError(400, "ไม่พบคำสั่งจัดการข้อมูลที่รองรับ");

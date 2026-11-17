@@ -5,9 +5,11 @@ import {
   readAllBanners,
   readAllNews,
   readBannerSettings,
+  readPortalSettings,
 } from "@/lib/cms-storage";
 import {
   DEFAULT_BANNER_SETTINGS,
+  DEFAULT_PORTAL_SETTINGS,
   getActiveBanners,
   getActivePublishedNews,
 } from "@/types/cms";
@@ -20,15 +22,21 @@ export async function GET() {
     const client = createAdminSupabase() || createPublicSupabase();
     if (!client) {
       return NextResponse.json(
-        { banners: [], news: [], bannerSettings: DEFAULT_BANNER_SETTINGS },
+        {
+          banners: [],
+          news: [],
+          bannerSettings: DEFAULT_BANNER_SETTINGS,
+          portalSettings: DEFAULT_PORTAL_SETTINGS,
+        },
         { headers: { "Cache-Control": "no-store" } }
       );
     }
 
-    const [allBanners, allNews, bannerSettings] = await Promise.all([
+    const [allBanners, allNews, bannerSettings, portalSettings] = await Promise.all([
       readAllBanners(client),
       readAllNews(client),
       readBannerSettings(client),
+      readPortalSettings(client),
     ]);
 
     const nowMs = Date.now();
@@ -37,13 +45,19 @@ export async function GET() {
         banners: getActiveBanners(allBanners, nowMs),
         news: getActivePublishedNews(allNews, nowMs),
         bannerSettings,
+        portalSettings,
       },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (err) {
     console.error("GET /api/cms error:", err);
     return NextResponse.json(
-      { banners: [], news: [], bannerSettings: DEFAULT_BANNER_SETTINGS },
+      {
+        banners: [],
+        news: [],
+        bannerSettings: DEFAULT_BANNER_SETTINGS,
+        portalSettings: DEFAULT_PORTAL_SETTINGS,
+      },
       { headers: { "Cache-Control": "no-store" } }
     );
   }

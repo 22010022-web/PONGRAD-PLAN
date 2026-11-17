@@ -103,10 +103,27 @@ export function resolveBannerAspectRatio(settings?: Partial<BannerDisplaySetting
   };
 }
 
+export interface PortalDisplaySettings {
+  showPublicDashboard: boolean;
+}
+
+export const DEFAULT_PORTAL_SETTINGS: PortalDisplaySettings = {
+  showPublicDashboard: false,
+};
+
+export function normalizePortalSettings(
+  raw?: Partial<PortalDisplaySettings> | null
+): PortalDisplaySettings {
+  return {
+    showPublicDashboard: Boolean(raw?.showPublicDashboard),
+  };
+}
+
 export interface CmsPublicPayload {
   banners: BannerItem[];
   news: NewsItem[];
   bannerSettings?: BannerDisplaySettings;
+  portalSettings?: PortalDisplaySettings;
 }
 
 export type NewsScheduleState = "draft" | "scheduled" | "active" | "expired";

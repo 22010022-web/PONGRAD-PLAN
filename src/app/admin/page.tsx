@@ -4,7 +4,14 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { LessonPlan, PlanStatus, Teacher } from "@/types/database";
-import { BannerDisplaySettings, BannerItem, DEFAULT_BANNER_SETTINGS, NewsItem } from "@/types/cms";
+import {
+  BannerDisplaySettings,
+  BannerItem,
+  DEFAULT_BANNER_SETTINGS,
+  DEFAULT_PORTAL_SETTINGS,
+  NewsItem,
+  PortalDisplaySettings,
+} from "@/types/cms";
 import { AdminBannerManager, AdminNewsManager } from "@/components/admin-cms-manager";
 import {
   Settings,
@@ -182,6 +189,9 @@ export default function AdminPage() {
   const [bannerItems, setBannerItems] = useState<BannerItem[]>([]);
   const [bannerSettings, setBannerSettings] =
     useState<BannerDisplaySettings>(DEFAULT_BANNER_SETTINGS);
+  const [portalSettings, setPortalSettings] =
+    useState<PortalDisplaySettings>(DEFAULT_PORTAL_SETTINGS);
+  const [savingPortalToggle, setSavingPortalToggle] = useState(false);
   const [loadingCms, setLoadingCms] = useState(true);
 
   const loadCmsData = async () => {
@@ -200,9 +210,50 @@ export default function AdminPage() {
         if (Array.isArray(data.news)) setNewsItems(data.news);
         if (Array.isArray(data.banners)) setBannerItems(data.banners);
         if (data.bannerSettings) setBannerSettings(data.bannerSettings);
+        if (data.portalSettings) setPortalSettings(data.portalSettings);
       }
     } finally {
       setLoadingCms(false);
+    }
+  };
+
+  const handleTogglePublicDashboard = async () => {
+    setSavingPortalToggle(true);
+    setAlert(null);
+    const nextValue = !portalSettings.showPublicDashboard;
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่");
+      const res = await fetch("/api/admin/cms", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          action: "save-portal-settings",
+          settings: { showPublicDashboard: nextValue },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "บันทึกการตั้งค่าหน้าแรกไม่สำเร็จ");
+      if (data.portalSettings) {
+        setPortalSettings(data.portalSettings);
+      } else {
+        setPortalSettings({ showPublicDashboard: nextValue });
+      }
+      setAlert({
+        type: "success",
+        text: nextValue
+          ? "เปิดแสดงแดชบอร์ดแบบรวมบนหน้าแรกเรียบร้อยแล้ว (ผู้เยี่ยมชมและครูก่อนล็อกอินสามารถดูภาพรวมทั้งโรงเรียนได้)"
+          : "ซ่อนแดชบอร์ดแบบรวมบนหน้าแรกเรียบร้อยแล้ว (ต้องเข้าสู่ระบบก่อนจึงจะดูข้อมูลได้)",
+      });
+    } catch (err: any) {
+      setAlert({ type: "error", text: err?.message || "อัปเดตการตั้งค่าหน้าแรกไม่สำเร็จ" });
+    } finally {
+      setSavingPortalToggle(false);
     }
   };
 
@@ -598,10 +649,56 @@ export default function AdminPage() {
 
       {/* Tab 1: โลโก้และข้อมูลโรงเรียน */}
       {activeTab === "school" && (
-        <form
-          onSubmit={handleSaveSchoolSettings}
-          className="glass-card rounded-3xl p-6 border border-white/80 space-y-5 max-w-2xl"
-        >
+        <div className="space-y-5 max-w-2xl">
+          {/* เปิด/ซ่อน แดชบอร์ดแบบรวมบนหน้าแรก */}
+          <div className="glass-card rounded-3xl p-5 border border-white/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-bold text-slate-800 text-sm sm:text-base">
+                  แสดงแดชบอร์ดแบบรวมบนหน้าแรก (ก่อนเข้าสู่ระบบ)
+                </h3>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                    portalSettings.showPublicDashboard
+                      ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                      : "bg-slate-100 text-slate-600 border-slate-200"
+                  }`}
+                >
+                  {portalSettings.showPublicDashboard ? "กำลังเปิดแสดงอยู่" : "ซ่อนอยู่"}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500">
+                เปิดเมื่อต้องการโชว์สถิติ KPI, ตารางความคืบหน้าคณะครู และประวัติส่งแผนรวมบนหน้าแรกโดยไม่ต้องล็อกอิน (ปิดไว้เพื่อแสดงเฉพาะแบนเนอร์/ข่าวสาร และซ่อนตารางข้อมูลจนกว่าจะเข้าสู่ระบบ)
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={savingPortalToggle || loadingCms}
+              onClick={handleTogglePublicDashboard}
+              className={`shrink-0 px-4 py-2.5 rounded-2xl text-xs font-bold border shadow-xs transition-all inline-flex items-center justify-center gap-1.5 disabled:opacity-50 ${
+                portalSettings.showPublicDashboard
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600"
+                  : "bg-slate-800 hover:bg-slate-900 text-white border-slate-800"
+              }`}
+            >
+              {portalSettings.showPublicDashboard ? (
+                <>
+                  <Eye className="w-4 h-4" />
+                  <span>{savingPortalToggle ? "กำลังบันทึก..." : "เปิดแสดงอยู่ (คลิกเพื่อซ่อน)"}</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-4 h-4" />
+                  <span>{savingPortalToggle ? "กำลังบันทึก..." : "ซ่อนอยู่ (คลิกเพื่อเปิดแสดง)"}</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <form
+            onSubmit={handleSaveSchoolSettings}
+            className="glass-card rounded-3xl p-6 border border-white/80 space-y-5"
+          >
           <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200">
             {logoUrl ? (
               <img
@@ -837,6 +934,7 @@ export default function AdminPage() {
             )}
           </div>
         </form>
+        </div>
       )}
 
       {/* Tab 2: จัดการรายชื่อครู */}
