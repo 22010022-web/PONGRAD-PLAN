@@ -397,9 +397,9 @@ export default function ReviewPage() {
 
       {/* Review & Interactive Stamp Modal */}
       {selectedPlan && (
-        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-slate-900/50 backdrop-blur-sm">
-          <div className="max-w-6xl w-full glass-panel rounded-3xl p-3.5 sm:p-5 border border-white/80 shadow-2xl flex flex-col gap-3 max-h-[95vh] lg:h-[94vh] overflow-y-auto lg:overflow-hidden">
-            <div className="shrink-0 flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-2.5">
+        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-1.5 sm:p-2.5 bg-slate-900/55 backdrop-blur-sm">
+          <div className="max-w-[98vw] xl:max-w-[1540px] w-full glass-panel rounded-2xl sm:rounded-3xl p-2.5 sm:p-4 border border-white/80 shadow-2xl flex flex-col gap-2 max-h-[97vh] lg:h-[96vh] overflow-y-auto lg:overflow-hidden">
+            <div className="shrink-0 flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-2">
               <div>
                 <h3 className="font-display font-bold text-base sm:text-lg text-slate-800">
                   {isPermissionMemoPlan(selectedPlan)
