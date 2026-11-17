@@ -18,6 +18,7 @@ import { FileText, CheckCircle2, Clock, FileCheck, LogIn, Loader2, BookOpen } fr
 import {
   buildSubmissionOrderMap,
   formatThaiDateTime,
+  getEffectiveScopeKind,
   PlanSortOrder,
   sortPlansByDate,
 } from "@/lib/plan-ordering";
@@ -151,9 +152,10 @@ export default function DashboardPage() {
   const pendingReview = plans.filter(p => p.status === "รอตรวจแผน" || p.status === "รอตรวจบันทึก").length;
   const completedPlans = plans.filter(p => p.status === "เสร็จสมบูรณ์").length;
 
-  const termCount = plans.filter(p => p.scope_type === "term").length;
-  const unitCount = plans.filter(p => p.scope_type === "unit").length;
-  const weekCount = plans.filter(p => p.scope_type === "week").length;
+  const permCount = plans.filter((p) => getEffectiveScopeKind(p) === "permission").length;
+  const termCount = plans.filter((p) => getEffectiveScopeKind(p) === "term").length;
+  const unitCount = plans.filter((p) => getEffectiveScopeKind(p) === "unit").length;
+  const weekCount = plans.filter((p) => getEffectiveScopeKind(p) === "week").length;
 
   const orderMap = buildSubmissionOrderMap(plans);
   const subjectOptions = Array.from(new Set(plans.map((p) => p.subject).filter(Boolean)));
@@ -181,7 +183,7 @@ export default function DashboardPage() {
     plans.filter((p) => {
       if (showCombinedDashboard && filterTeacher && p.teacher_name !== filterTeacher) return false;
       if (filterSubject && p.subject !== filterSubject) return false;
-      if (filterScope && p.scope_type !== filterScope) return false;
+      if (filterScope && getEffectiveScopeKind(p) !== filterScope) return false;
       if (filterStatus && p.status !== filterStatus) return false;
       return true;
     }),
@@ -321,7 +323,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <p className="text-xs text-slate-500 mt-2 font-medium">
-            รวมเล่ม {termCount} · รายหน่วย {unitCount} · สัปดาห์ {weekCount}
+            ขออนุญาต {permCount} · รวมเล่ม {termCount} · หน่วย {unitCount} · สัปดาห์ {weekCount}
           </p>
         </div>
 
@@ -388,6 +390,7 @@ export default function DashboardPage() {
               <tr>
                 <th className="py-3 px-4">ชื่อ - นามสกุล</th>
                 <th className="py-3 px-4">ระดับชั้น / บทบาท</th>
+                <th className="py-3 px-4 text-center">ขออนุญาตใช้แผน</th>
                 <th className="py-3 px-4 text-center">รวมเล่ม</th>
                 <th className="py-3 px-4 text-center">รายหน่วย</th>
                 <th className="py-3 px-4 text-center">รายสัปดาห์</th>
@@ -401,9 +404,10 @@ export default function DashboardPage() {
                 const tPlans = showCombinedDashboard
                   ? plans.filter((p) => p.teacher_id === t.id || p.teacher_name === t.name)
                   : plans;
-                const tTerm = tPlans.filter(p => p.scope_type === 'term').length;
-                const tUnit = tPlans.filter(p => p.scope_type === 'unit').length;
-                const tWeek = tPlans.filter(p => p.scope_type === 'week').length;
+                const tPerm = tPlans.filter((p) => getEffectiveScopeKind(p) === "permission").length;
+                const tTerm = tPlans.filter((p) => getEffectiveScopeKind(p) === "term").length;
+                const tUnit = tPlans.filter((p) => getEffectiveScopeKind(p) === "unit").length;
+                const tWeek = tPlans.filter((p) => getEffectiveScopeKind(p) === "week").length;
                 const tPost = tPlans.filter(p => !!p.post_file_url || p.use_existing_file).length;
                 const tApproved = tPlans.filter(p => p.status === 'เสร็จสมบูรณ์' || p.status === 'แผนผ่าน (รอส่งบันทึก)' || p.status === 'รอตรวจบันทึก').length;
                 const tNeedFix = tPlans.filter(p => p.status === 'แผนต้องแก้ไข' || p.status === 'บันทึกต้องแก้ไข').length;
@@ -413,6 +417,9 @@ export default function DashboardPage() {
                   <tr key={t.id} className="hover:bg-white/60 transition-colors">
                     <td className="py-3 px-4 font-bold text-slate-900">{t.name}</td>
                     <td className="py-3 px-4 text-xs text-slate-600">{t.grade_level}</td>
+                    <td className="py-3 px-4 text-center font-semibold text-teal-700">
+                      {tPerm > 0 ? `${tPerm} วิชา` : "-"}
+                    </td>
                     <td className="py-3 px-4 text-center font-semibold text-amber-700">
                       {tTerm > 0 ? `${tTerm} เล่ม` : "-"}
                     </td>
@@ -494,6 +501,7 @@ export default function DashboardPage() {
               className="text-xs rounded-xl glass-input px-3 py-2 text-slate-700 font-medium"
             >
               <option value="">ทุกรูปแบบ</option>
+              <option value="permission">📝 ใบขออนุญาตใช้แผน</option>
               <option value="week">📅 รายสัปดาห์</option>
               <option value="unit">📑 รายหน่วยการเรียนรู้</option>
               <option value="term">📚 รวมเล่มรายภาคเรียน</option>
@@ -568,9 +576,26 @@ export default function DashboardPage() {
                       <div className="text-xs text-slate-500">ชั้น {p.class_level}</div>
                     </td>
                     <td className="py-3 px-4">
-                      <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 mr-1.5">
-                        {p.scope_type === 'term' ? '📚 รวมเล่ม' : p.scope_type === 'week' ? '📅 รายสัปดาห์' : '📑 รายหน่วย'}
-                      </span>
+                      {(() => {
+                        const kind = getEffectiveScopeKind(p);
+                        return (
+                          <span
+                            className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-md mr-1.5 ${
+                              kind === "permission"
+                                ? "bg-teal-100 text-teal-800"
+                                : "bg-slate-100 text-slate-700"
+                            }`}
+                          >
+                            {kind === "permission"
+                              ? "📝 ขออนุญาตใช้แผน"
+                              : kind === "term"
+                              ? "📚 รวมเล่ม"
+                              : kind === "week"
+                              ? "📅 รายสัปดาห์"
+                              : "📑 รายหน่วย"}
+                          </span>
+                        );
+                      })()}
                       <span className="text-xs text-slate-600 font-medium">{p.scope_value}</span>
                     </td>
                     <td className="py-3 px-4 text-center">

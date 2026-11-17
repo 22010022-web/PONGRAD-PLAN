@@ -1,6 +1,24 @@
 import { LessonPlan } from "@/types/database";
 
 export type PlanSortOrder = "newest" | "oldest";
+export type EffectiveScopeKind = "week" | "unit" | "term" | "permission";
+
+export const PERMISSION_MEMO_PREFIX = "ใบขออนุญาตใช้แผน";
+
+export function isPermissionMemoPlan(
+  plan?: { scope_value?: string | null } | null
+): boolean {
+  return Boolean(plan?.scope_value?.startsWith(PERMISSION_MEMO_PREFIX));
+}
+
+export function getEffectiveScopeKind(
+  plan?: { scope_type?: string | null; scope_value?: string | null } | null
+): EffectiveScopeKind {
+  if (isPermissionMemoPlan(plan)) return "permission";
+  if (plan?.scope_type === "week") return "week";
+  if (plan?.scope_type === "unit") return "unit";
+  return "term";
+}
 
 export interface SubmissionOrderInfo {
   /** ลำดับการส่งทั้งหมดของครูท่านนี้ (เรียงจากส่งก่อน -> หลัง: 1, 2, 3...) */

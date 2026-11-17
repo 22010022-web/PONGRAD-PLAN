@@ -19,6 +19,7 @@ import { uploadPdfToGoogleDrive } from "@/lib/drive-upload-client";
 import {
   buildSubmissionOrderMap,
   formatThaiDateTime,
+  isPermissionMemoPlan,
   PlanSortOrder,
   sortPlansByDate,
 } from "@/lib/plan-ordering";
@@ -240,12 +241,13 @@ export default function MyPlansPage() {
     setReviseUploadProgress(0);
 
     try {
+      const isPermMemo = isPermissionMemoPlan(selectedPlanForRevise);
       const result = await uploadPdfToGoogleDrive(
         file,
         selectedPlanForRevise.teacher_name || "ครูผู้สอน",
         (pct) => setReviseUploadProgress(pct),
         {
-          kind: isPostRevision ? "post" : "plan",
+          kind: isPostRevision ? "post" : isPermMemo ? "permission" : "plan",
           subject: selectedPlanForRevise.subject,
           classLevel: selectedPlanForRevise.class_level,
           scopeValue: selectedPlanForRevise.scope_value,
@@ -278,13 +280,15 @@ export default function MyPlansPage() {
     setReviseSuccess("");
 
     try {
+      const isPermMemo = isPermissionMemoPlan(selectedPlanForRevise);
       const isPostRevision = selectedPlanForRevise.status === "บันทึกต้องแก้ไข";
       const isPlanRevisionAfterReview = selectedPlanForRevise.status === "แผนต้องแก้ไข";
       const nextVersion = (selectedPlanForRevise.version || 1) + 1;
 
+      // ใบขออนุญาตใช้แผนเมื่อแก้ไขแล้วส่งกลับสถานะ 'รอตรวจแผน' เพื่อรอ ผอ. ลงนามอนุญาตใหม่
       const nextStatus = isPostRevision
         ? "เสร็จสมบูรณ์"
-        : isPlanRevisionAfterReview
+        : isPlanRevisionAfterReview && !isPermMemo
         ? "แผนผ่าน (รอส่งบันทึก)"
         : "รอตรวจแผน";
 
@@ -311,14 +315,18 @@ export default function MyPlansPage() {
 
       if (updateErr) throw updateErr;
 
-      // แจ้งเตือน LINE เมื่อส่งฉบับแก้ไขแทนไฟล์เดิม
+      // แจ้งเตือน LINE เมื่อส่งฉบับแก้ไข
       if (isPostRevision || isPlanRevisionAfterReview) {
         try {
           await fetch("/api/line-notify", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              eventType: isPostRevision ? "post_revised" : "plan_revised",
+              eventType: isPermMemo
+                ? "plan_submitted"
+                : isPostRevision
+                ? "post_revised"
+                : "plan_revised",
               planData: {
                 ...selectedPlanForRevise,
                 ...updatePayload,
@@ -334,9 +342,11 @@ export default function MyPlansPage() {
       setReviseSuccess(
         isPostRevision
           ? "อัปโหลดบันทึกฉบับแก้ไขแทนไฟล์เดิมแล้ว สถานะปรับเป็น 'เสร็จสมบูรณ์' ทันที!"
+          : isPlanRevisionAfterReview && isPermMemo
+          ? "ส่งใบขออนุญาตใช้แผนฉบับแก้ไขเรียบร้อยแล้ว (รอ ผอ. ลงนามอนุญาตอีกครั้ง)"
           : isPlanRevisionAfterReview
           ? "อัปโหลดแผนฉบับแก้ไขแทนไฟล์เดิมแล้ว สถานะปรับเป็น 'แผนผ่าน (รอส่งบันทึก)' ทันที (ผอ. ไม่ต้องตรวจซ้ำ)!"
-          : "เปลี่ยนไฟล์แผน PDF เรียบร้อยแล้ว"
+          : "เปลี่ยนไฟล์ PDF เรียบร้อยแล้ว"
       );
 
       setTimeout(() => {
@@ -442,6 +452,11 @@ export default function MyPlansPage() {
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
+                      {isPermissionMemoPlan(p) && (
+                        <span className="px-2 py-0.5 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 text-[11px] font-bold">
+                          📝 ขออนุญาตใช้แผน
+                        </span>
+                      )}
                       {order && (
                         <span className="px-2 py-0.5 rounded-lg bg-pink-50 text-pink-700 border border-pink-200 text-[11px] font-bold">
                           ส่งครั้งที่ {order.subjectOrder} ({p.subject})
@@ -460,7 +475,7 @@ export default function MyPlansPage() {
                     </div>
                     {p.unit_title && (
                       <div className="text-xs text-pink-700 font-medium mt-0.5">
-                        เรื่อง: {p.unit_title}
+                        {isPermissionMemoPlan(p) ? "เลขที่/ชั่วโมง:" : "เรื่อง:"} {p.unit_title}
                       </div>
                     )}
                   </div>
@@ -478,7 +493,11 @@ export default function MyPlansPage() {
                         : "bg-red-100 text-red-800"
                     }`}
                   >
-                    {p.status}
+                    {isPermissionMemoPlan(p) && p.status === "รอตรวจแผน"
+                      ? "รอ ผอ. อนุญาต"
+                      : isPermissionMemoPlan(p) && p.status === "เสร็จสมบูรณ์"
+                      ? "อนุญาตแล้ว (ลงนามแล้ว)"
+                      : p.status}
                   </span>
                 </div>
 
@@ -495,7 +514,7 @@ export default function MyPlansPage() {
                           rel="noreferrer"
                           className="font-bold text-pink-700 underline"
                         >
-                          เปิดดูไฟล์ PDF ที่ ผอ. ขีดตรวจแก้ไข ↗
+                          เปิดดูไฟล์ PDF ที่ ผอ. ลงนาม ↗
                         </a>
                       </div>
                     )}
@@ -512,7 +531,7 @@ export default function MyPlansPage() {
                       className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-pink-50 text-pink-700 hover:bg-pink-100 border border-pink-200 flex items-center gap-1"
                     >
                       <LinkIcon className="w-3.5 h-3.5" />
-                      ไฟล์แผน PDF
+                      {isPermissionMemoPlan(p) ? "ไฟล์บันทึกขออนุญาต PDF" : "ไฟล์แผน PDF"}
                     </a>
                     {(p.post_file_url || p.use_existing_file) && (
                       <a
@@ -528,7 +547,7 @@ export default function MyPlansPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    {/* กรณี ผอ. ตรวจแล้วให้แก้ไข: ครูแก้เอง ส่งแทนไฟล์เดิม -> ผ่านโดย ผอ. ไม่ต้องตรวจซ้ำ */}
+                    {/* กรณี ผอ. ตรวจแล้วให้แก้ไข: ครูแก้เอง ส่งแทนไฟล์เดิม */}
                     {(p.status === "แผนต้องแก้ไข" || p.status === "บันทึกต้องแก้ไข") && (
                       <button
                         type="button"
@@ -538,6 +557,8 @@ export default function MyPlansPage() {
                         <RefreshCw className="w-3.5 h-3.5" />
                         {p.status === "บันทึกต้องแก้ไข"
                           ? "อัปโหลดบันทึกฉบับแก้ไข (แทนไฟล์เดิม)"
+                          : isPermissionMemoPlan(p)
+                          ? "ส่งใบขออนุญาตฉบับแก้ไข (รอ ผอ. ลงนาม)"
                           : "อัปโหลดแผนฉบับแก้ไข (แทนไฟล์เดิม)"}
                       </button>
                     )}
@@ -550,12 +571,12 @@ export default function MyPlansPage() {
                         className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 flex items-center gap-1"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
-                        เปลี่ยนไฟล์แผน
+                        {isPermissionMemoPlan(p) ? "เปลี่ยนไฟล์ขออนุญาต" : "เปลี่ยนไฟล์แผน"}
                       </button>
                     )}
 
-                    {/* ส่งบันทึกหลังสอนเมื่อแผนผ่านแล้ว */}
-                    {p.status === "แผนผ่าน (รอส่งบันทึก)" && (
+                    {/* ส่งบันทึกหลังสอนเมื่อแผนผ่านแล้ว (ไม่แสดงสำหรับใบขออนุญาตใช้แผน) */}
+                    {p.status === "แผนผ่าน (รอส่งบันทึก)" && !isPermissionMemoPlan(p) && (
                       <button
                         type="button"
                         onClick={() => {

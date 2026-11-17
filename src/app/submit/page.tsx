@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { UploadCloud, CheckCircle2, FileText, AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { uploadPdfToGoogleDrive } from "@/lib/drive-upload-client";
+import { PERMISSION_MEMO_PREFIX } from "@/lib/plan-ordering";
 
 interface SelectOption {
   value: string;
@@ -16,6 +18,21 @@ const TERM_OPTIONS: SelectOption[] = [
   { value: "รายภาคเรียน (รวมเล่มเทอม 2/2569)", label: "ส่งรวมเล่ม รายภาคเรียนที่ 2/2569 (1 ครั้ง/วิชา/เทอม)" },
   { value: "รายภาคเรียน (รวมเล่มเทอม 1/2569)", label: "ส่งรวมเล่ม รายภาคเรียนที่ 1/2569 (1 ครั้ง/วิชา/เทอม)" },
   { value: "รายปีการศึกษา (รวมเล่มตลอดปี 2569)", label: "ส่งรวมเล่ม ตลอดปีการศึกษา 2569" },
+];
+
+const PERMISSION_OPTIONS: SelectOption[] = [
+  {
+    value: `${PERMISSION_MEMO_PREFIX} (บันทึกข้อความ) · เทอม 2/2569`,
+    label: "บันทึกข้อความขออนุญาตใช้แผน (ภาคเรียนที่ 2/2569) — 1 ใบ/รายวิชา",
+  },
+  {
+    value: `${PERMISSION_MEMO_PREFIX} (บันทึกข้อความ) · เทอม 1/2569`,
+    label: "บันทึกข้อความขออนุญาตใช้แผน (ภาคเรียนที่ 1/2569) — 1 ใบ/รายวิชา",
+  },
+  {
+    value: `${PERMISSION_MEMO_PREFIX} (บันทึกข้อความ) · ปีการศึกษา 2569`,
+    label: "บันทึกข้อความขออนุญาตใช้แผน (ตลอดปีการศึกษา 2569) — 1 ใบ/รายวิชา",
+  },
 ];
 
 const WEEK_OPTIONS: SelectOption[] = [
@@ -141,7 +158,7 @@ export default function SubmitPlanPage() {
     };
   }, [profile?.full_name, teacher?.name, teacher?.category, teacher?.default_subject, teacher?.grade_level, isAdmin]);
 
-  const [scopeType, setScopeType] = useState<"term" | "unit" | "week">("week");
+  const [scopeType, setScopeType] = useState<"week" | "unit" | "term" | "permission">("week");
   const [scopeValue, setScopeValue] = useState(WEEK_OPTIONS[0].value);
   const [unitTitle, setUnitTitle] = useState("");
   const [subject, setSubject] = useState("");
@@ -157,6 +174,9 @@ export default function SubmitPlanPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [existingPermissionPlans, setExistingPermissionPlans] = useState<
+    { id: string; subject: string; class_level: string; scope_value: string; status: string }[]
+  >([]);
 
   const resolvedSubject = subject === "__CUSTOM__" ? customSubject.trim() : subject.trim();
   const isSubjectSelected = Boolean(resolvedSubject);
@@ -174,10 +194,45 @@ export default function SubmitPlanPage() {
       setScopeValue(WEEK_OPTIONS[0].value);
     } else if (scopeType === "unit") {
       setScopeValue("หน่วยการเรียนรู้ที่ 1");
+    } else if (scopeType === "permission") {
+      setScopeValue(PERMISSION_OPTIONS[0].value);
     } else {
       setScopeValue(TERM_OPTIONS[0].value);
     }
   }, [scopeType]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setExistingPermissionPlans([]);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from("lesson_plans")
+      .select("id, subject, class_level, scope_value, status")
+      .eq("created_by", user.id)
+      .like("scope_value", `${PERMISSION_MEMO_PREFIX}%`)
+      .then(({ data }) => {
+        if (!cancelled && Array.isArray(data)) {
+          setExistingPermissionPlans(data);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const duplicatePermissionPlan = useMemo(() => {
+    if (scopeType !== "permission" || !resolvedSubject) return null;
+    return (
+      existingPermissionPlans.find(
+        (p) =>
+          p.subject === resolvedSubject &&
+          p.class_level === classLevel &&
+          p.scope_value === scopeValue
+      ) || null
+    );
+  }, [scopeType, resolvedSubject, classLevel, scopeValue, existingPermissionPlans]);
 
   const discardUnsubmittedDriveFile = async (targetFileId: string | null) => {
     if (!targetFileId) return;
@@ -217,7 +272,7 @@ export default function SubmitPlanPage() {
         teacherName,
         (pct) => setUploadProgress(pct),
         {
-          kind: "plan",
+          kind: scopeType === "permission" ? "permission" : "plan",
           subject: resolvedSubject,
           classLevel,
           scopeValue,
@@ -261,7 +316,13 @@ export default function SubmitPlanPage() {
       return;
     }
     if (!resolvedSubject) {
-      setErrorMsg("กรุณาเลือกรายวิชาก่อนส่งแผนการสอน");
+      setErrorMsg("กรุณาเลือกรายวิชาก่อนส่งเอกสาร");
+      return;
+    }
+    if (duplicatePermissionPlan) {
+      setErrorMsg(
+        `วิชา ${resolvedSubject} (${classLevel}) ได้ส่งใบขออนุญาตใช้แผนสำหรับ ${scopeValue} ไปแล้ว (ระบบกำหนด 1 ใบต่อ 1 รายวิชา) — หากต้องการแก้ไขไฟล์ ไปที่หน้า "แผนของฉัน"`
+      );
       return;
     }
     if (fileId && uploadedForSubject && resolvedSubject !== uploadedForSubject) {
@@ -290,7 +351,7 @@ export default function SubmitPlanPage() {
         teacher_name: teacherName,
         subject: resolvedSubject,
         class_level: classLevel,
-        scope_type: scopeType,
+        scope_type: scopeType === "permission" ? "term" : scopeType,
         scope_value: scopeValue,
         unit_title: unitTitle.trim() || null,
         plan_file_url: fileUrl.trim(),
@@ -327,7 +388,9 @@ export default function SubmitPlanPage() {
       }
 
       setSuccessMsg(
-        `ส่งแผนการจัดการเรียนรู้เรียบร้อยแล้ว!${lineWarning || " ข้อมูลแจ้งเตือนเข้า LINE กลุ่มโรงเรียนแล้วครับ"}`
+        scopeType === "permission"
+          ? `ส่งใบขออนุญาตใช้แผนการสอน (1 ใบต่อ 1 รายวิชา) เรียบร้อยแล้ว!${lineWarning || " แจ้งเตือน ผอ. ในกลุ่ม LINE เพื่อรอลงนามแล้วครับ"}`
+          : `ส่งแผนการจัดการเรียนรู้เรียบร้อยแล้ว!${lineWarning || " ข้อมูลแจ้งเตือนเข้า LINE กลุ่มโรงเรียนแล้วครับ"}`
       );
       setTimeout(() => {
         router.push("/my-plans");
@@ -353,7 +416,7 @@ export default function SubmitPlanPage() {
             แบบฟอร์มส่งแผนการจัดการเรียนรู้
           </h1>
           <p className="text-xs text-slate-500">
-            ส่งได้ทั้งแบบ รายสัปดาห์ (1–20), รายหน่วยการเรียนรู้ (1–36) และ รวมเล่มรายภาคเรียน
+            ส่งได้ทั้งแบบ รายสัปดาห์ (1–20), รายหน่วย (1–36), รวมเล่มรายภาคเรียน และ ใบขออนุญาตใช้แผน (บันทึกข้อความ 1 ใบ/วิชา)
           </p>
         </div>
       </div>
@@ -373,12 +436,16 @@ export default function SubmitPlanPage() {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* เลือกรูปแบบการส่ง: รายสัปดาห์ -> รายหน่วยการเรียนรู้ -> รวมเล่มรายภาคเรียน */}
+        {/* เลือกรูปแบบการส่ง: รายสัปดาห์ -> รายหน่วย -> รวมเล่ม -> ใบขออนุญาตใช้แผน */}
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-2">
-            1. เลือกรูปแบบการส่งแผนการสอน (เลือกได้ตามความพร้อม)
+            1. เลือกรูปแบบการส่งเอกสาร (เลือกได้ตามความพร้อม)
           </label>
-          <div className={`grid gap-2 ${teacherProfileConfig.allowWeek ? "grid-cols-3" : "grid-cols-2"}`}>
+          <div
+            className={`grid gap-2 ${
+              teacherProfileConfig.allowWeek ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-3"
+            }`}
+          >
             {teacherProfileConfig.allowWeek && (
               <button
                 type="button"
@@ -414,13 +481,38 @@ export default function SubmitPlanPage() {
             >
               📚 รวมเล่มรายภาคเรียน
             </button>
+            <button
+              type="button"
+              onClick={() => setScopeType("permission")}
+              className={`p-3 rounded-2xl text-xs sm:text-sm font-bold border transition-all ${
+                scopeType === "permission"
+                  ? "bg-teal-600 text-white border-teal-700 shadow-md"
+                  : "bg-white/80 text-teal-800 border-teal-200 hover:bg-teal-50/60"
+              }`}
+            >
+              📝 ใบขออนุญาตใช้แผน
+            </button>
           </div>
         </div>
+
+        {scopeType === "permission" && (
+          <div className="p-3.5 rounded-2xl bg-teal-50 border border-teal-200 text-xs text-teal-900 space-y-1">
+            <div className="font-bold">
+              📌 ใบขออนุญาตใช้แผนการจัดการเรียนรู้ (บันทึกข้อความ 1 ใบ ต่อ 1 รายวิชา)
+            </div>
+            <p className="text-[11px] text-teal-800 leading-relaxed">
+              ให้คุณครูส่งเป็นไฟล์ <b>PDF บันทึกข้อความ</b> (ลงชื่อครูผู้สอนเรียบร้อย) และเว้นพื้นที่ด้านล่างสำหรับ ผอ. ติ๊ก <b>☑ อนุญาต / ☐ ไม่อนุญาต</b>, เขียนเหตุผล และลงลายเซ็นผ่านระบบได้เลยครับ
+            </p>
+          </div>
+        )}
 
         {/* Dropdown ประเภทย่อย */}
         <div>
           <label className="block text-xs font-bold text-slate-700 mb-1.5">
-            2. ระบุ{teacherProfileConfig.allowWeek ? "สัปดาห์ / " : ""}หน่วย / ภาคเรียน
+            2. ระบุ
+            {scopeType === "permission"
+              ? "ภาคเรียนของใบขออนุญาตใช้แผน"
+              : `${teacherProfileConfig.allowWeek ? "สัปดาห์ / " : ""}หน่วย / ภาคเรียน`}
           </label>
           {scopeType === "week" && teacherProfileConfig.allowWeek && (
             <select
@@ -463,18 +555,38 @@ export default function SubmitPlanPage() {
               ))}
             </select>
           )}
+
+          {scopeType === "permission" && (
+            <select
+              value={scopeValue}
+              onChange={(e) => setScopeValue(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800"
+            >
+              {PERMISSION_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         {scopeType !== "term" && (
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              ชื่อหน่วยการเรียนรู้ / เรื่อง (ถ้ามี)
+              {scopeType === "permission"
+                ? "รหัสวิชา / เวลาเรียน / เลขที่บันทึกข้อความ (ถ้ามี)"
+                : "ชื่อหน่วยการเรียนรู้ / เรื่อง (ถ้ามี)"}
             </label>
             <input
               type="text"
               value={unitTitle}
               onChange={(e) => setUnitTitle(e.target.value)}
-              placeholder="เช่น การบวกเลขสองหลัก, ตัวเรา, ปฐมนิเทศ"
+              placeholder={
+                scopeType === "permission"
+                  ? "เช่น รหัสวิชา ท ๒๑๑๐๑ · เวลาเรียน ๑๐๐ ชั่วโมง"
+                  : "เช่น การบวกเลขสองหลัก, ตัวเรา, ปฐมนิเทศ"
+              }
               className="w-full px-4 py-2.5 rounded-xl text-sm glass-input text-slate-800"
             />
           </div>
@@ -609,11 +721,34 @@ export default function SubmitPlanPage() {
           </div>
         </div>
 
+        {/* แจ้งเตือนกรณีส่งใบขออนุญาตใช้แผนวิชานี้ไปแล้ว (1 ใบต่อ 1 รายวิชา) */}
+        {duplicatePermissionPlan && (
+          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="font-bold">
+                ⚠️ วิชา {resolvedSubject} ({classLevel}) ส่งใบขออนุญาตใช้แผนสำหรับ{" "}
+                {scopeValue} แล้ว (สถานะ: {duplicatePermissionPlan.status})
+              </div>
+              <div className="text-[11px] text-amber-800 mt-0.5">
+                ตามข้อตกลงใช้บันทึกข้อความ 1 ใบต่อ 1 รายวิชา — หากต้องการเปลี่ยนหรืออัปโหลดไฟล์แก้ไข กรุณาจัดการที่หน้า &quot;แผนของฉัน&quot;
+              </div>
+            </div>
+            <Link
+              href="/my-plans"
+              className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs"
+            >
+              ไปหน้าแผนของฉัน →
+            </Link>
+          </div>
+        )}
+
         {/* อัปโหลดไฟล์ PDF เข้า Google Drive อัตโนมัติ หรือวางลิงก์ */}
         <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
-              อัปโหลดไฟล์ PDF แผนการสอน (เก็บเข้า Google Drive โรงเรียนอัตโนมัติ)
+              {scopeType === "permission"
+                ? "อัปโหลดไฟล์ PDF บันทึกข้อความขออนุญาตใช้แผน (เก็บเข้า Google Drive อัตโนมัติ)"
+                : "อัปโหลดไฟล์ PDF แผนการสอน (เก็บเข้า Google Drive โรงเรียนอัตโนมัติ)"}
             </label>
             <p className="text-[11px] text-slate-500 mb-2">
               {isSubjectSelected ? (
@@ -632,7 +767,7 @@ export default function SubmitPlanPage() {
             </p>
             <label
               className={`flex items-center justify-center gap-2 w-full px-4 py-3 rounded-xl border-2 border-dashed transition-colors text-xs font-semibold ${
-                !isSubjectSelected || isUploading || isResettingUpload
+                !isSubjectSelected || isUploading || isResettingUpload || Boolean(duplicatePermissionPlan)
                   ? "border-slate-300 bg-slate-100 text-slate-400 cursor-not-allowed"
                   : "border-pink-300 bg-white hover:bg-pink-50/40 cursor-pointer text-pink-700"
               }`}
@@ -641,6 +776,11 @@ export default function SubmitPlanPage() {
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span>กำลังอัปโหลดเข้า Google Drive... {uploadProgress ?? 0}%</span>
+                </>
+              ) : duplicatePermissionPlan ? (
+                <>
+                  <AlertCircle className="w-4 h-4" />
+                  <span>วิชานี้ส่งใบขออนุญาตใช้แผนแล้ว (1 ใบต่อ 1 รายวิชา)</span>
                 </>
               ) : !isSubjectSelected ? (
                 <>
@@ -657,7 +797,12 @@ export default function SubmitPlanPage() {
                 type="file"
                 accept="application/pdf,.pdf"
                 onChange={handleFileChange}
-                disabled={!isSubjectSelected || isUploading || isResettingUpload}
+                disabled={
+                  !isSubjectSelected ||
+                  isUploading ||
+                  isResettingUpload ||
+                  Boolean(duplicatePermissionPlan)
+                }
                 className="hidden"
               />
             </label>
@@ -703,10 +848,14 @@ export default function SubmitPlanPage() {
 
         <button
           type="submit"
-          disabled={isSubmitting || isUploading}
+          disabled={isSubmitting || isUploading || Boolean(duplicatePermissionPlan)}
           className="w-full py-3.5 rounded-xl bg-gradient-to-r from-pink-600 via-purple-600 to-amber-500 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all disabled:opacity-50"
         >
-          {isSubmitting ? "กำลังส่งแผนและแจ้งเตือน LINE..." : "✔ ยืนยันการส่งแผนการสอน"}
+          {isSubmitting
+            ? "กำลังส่งเอกสารและแจ้งเตือน LINE..."
+            : scopeType === "permission"
+            ? "✔ ยืนยันส่งใบขออนุญาตใช้แผน (บันทึกข้อความ)"
+            : "✔ ยืนยันการส่งแผนการสอน"}
         </button>
       </form>
     </div>

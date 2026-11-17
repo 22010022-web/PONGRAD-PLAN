@@ -4,6 +4,7 @@ import {
   getLineQuotaReport,
   sendLineFlexNotification,
 } from "@/lib/line-notify";
+import { isPermissionMemoPlan } from "@/lib/plan-ordering";
 import { POST as webhookPost } from "@/app/api/line/webhook/route";
 
 async function resolveTeacherEmail(planData: any): Promise<string | null> {
@@ -108,11 +109,16 @@ export async function POST(request: Request) {
 
     const teacherEmail = await resolveTeacherEmail(planData);
     const emailField = teacherEmail ? [{ label: "อีเมลครู", value: teacherEmail }] : [];
+    const isPermissionMemo = isPermissionMemoPlan(planData);
 
     if (eventType === "plan_submitted") {
-      title = "ส่งแผนการจัดการเรียนรู้";
-      subtitle = "สถานะ: รอตรวจแผน | รร.วัดโป่งแรด";
-      headerColor = "#1e3a8a";
+      title = isPermissionMemo
+        ? "ส่งใบขออนุญาตใช้แผนการสอน (บันทึกข้อความ)"
+        : "ส่งแผนการจัดการเรียนรู้";
+      subtitle = isPermissionMemo
+        ? "สถานะ: รอ ผอ. อนุญาตและลงลายเซ็น | รร.วัดโป่งแรด"
+        : "สถานะ: รอตรวจแผน | รร.วัดโป่งแรด";
+      headerColor = isPermissionMemo ? "#0d9488" : "#1e3a8a";
       fields = [
         { label: "ผู้สอน", value: planData.teacher_name },
         ...emailField,
@@ -120,11 +126,23 @@ export async function POST(request: Request) {
         { label: "รูปแบบ", value: `${planData.scope_value} (v${planData.version})` },
       ];
       if (planData.unit_title) {
-        fields.push({ label: "ชื่อหน่วย/เรื่อง", value: planData.unit_title });
+        fields.push({
+          label: isPermissionMemo ? "เลขที่หนังสือ/ชั่วโมง" : "ชื่อหน่วย/เรื่อง",
+          value: planData.unit_title,
+        });
       }
       buttons = [
-        { label: "เปิดดูไฟล์แผน", url: planData.plan_file_url, primary: true, color: "#2563eb" },
-        { label: "เข้าหน้าตรวจแผน", url: `${appUrl}/review`, primary: false },
+        {
+          label: isPermissionMemo ? "เปิดดูใบขออนุญาต" : "เปิดดูไฟล์แผน",
+          url: planData.plan_file_url,
+          primary: true,
+          color: isPermissionMemo ? "#0d9488" : "#2563eb",
+        },
+        {
+          label: isPermissionMemo ? "เข้าหน้าลงนาม ผอ." : "เข้าหน้าตรวจแผน",
+          url: `${appUrl}/review`,
+          primary: false,
+        },
       ];
     } else if (eventType === "post_submitted") {
       title = "ส่งบันทึกหลังการสอน";

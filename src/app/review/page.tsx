@@ -13,9 +13,12 @@ import {
 import {
   buildSubmissionOrderMap,
   formatThaiDateTime,
+  isPermissionMemoPlan,
   PlanSortOrder,
   sortPlansByDate,
 } from "@/lib/plan-ordering";
+
+type ReviewFilterType = "all" | "permission" | "plan";
 
 export default function ReviewPage() {
   const { user, profile, isAdmin } = useAuth();
@@ -24,6 +27,7 @@ export default function ReviewPage() {
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [sortOrder, setSortOrder] = useState<PlanSortOrder>("oldest");
+  const [filterType, setFilterType] = useState<ReviewFilterType>("all");
   const [selectedPlan, setSelectedPlan] = useState<LessonPlan | null>(null);
   const [reviewNote, setReviewNote] = useState("");
   const [stampOntoPdf, setStampOntoPdf] = useState(true);
@@ -223,8 +227,17 @@ export default function ReviewPage() {
   }
 
   const orderMap = buildSubmissionOrderMap(plans);
+  const allPendingPlans = plans.filter(
+    (p) => p.status === "รอตรวจแผน" || p.status === "รอตรวจบันทึก"
+  );
+  const pendingPermissionCount = allPendingPlans.filter((p) => isPermissionMemoPlan(p)).length;
+  const pendingPlanCount = allPendingPlans.length - pendingPermissionCount;
   const pendingPlans = sortPlansByDate(
-    plans.filter((p) => p.status === "รอตรวจแผน" || p.status === "รอตรวจบันทึก"),
+    allPendingPlans.filter((p) => {
+      if (filterType === "permission") return isPermissionMemoPlan(p);
+      if (filterType === "plan") return !isPermissionMemoPlan(p);
+      return true;
+    }),
     sortOrder
   );
 
@@ -236,19 +249,45 @@ export default function ReviewPage() {
           ระบบนิเทศและตรวจแผนการสอน (สำหรับ ผอ.)
         </h1>
         <p className="text-xs text-slate-500 mt-0.5">
-          ประทับความเห็นและลายเซ็นบนหน้ากระดาษ PDF แบบลากวางตำแหน่งได้จริง พร้อมจำลายเซ็นอัตโนมัติ
+          ประทับความเห็นและลายเซ็นบนหน้ากระดาษ PDF ทั้งแผนการสอนและใบขออนุญาตใช้แผน (บันทึกข้อความ) พร้อมจำลายเซ็นอัตโนมัติ
         </p>
       </div>
 
       {/* รายการแผนที่รอตรวจ */}
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
-            <span>รายการที่รอการตรวจอนุมัติ</span>
-            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-extrabold">
-              {pendingPlans.length}
-            </span>
-          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+              <span>รายการที่รอการตรวจอนุมัติ</span>
+              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-extrabold">
+                {pendingPlans.length}
+              </span>
+            </h2>
+
+            <div className="inline-flex flex-wrap rounded-xl bg-white/75 p-1 border border-slate-200 gap-1">
+              {[
+                { key: "all" as ReviewFilterType, label: `ทั้งหมด (${allPendingPlans.length})` },
+                {
+                  key: "permission" as ReviewFilterType,
+                  label: `📝 ใบขออนุญาต (${pendingPermissionCount})`,
+                },
+                { key: "plan" as ReviewFilterType, label: `📚 แผน/บันทึก (${pendingPlanCount})` },
+              ].map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  onClick={() => setFilterType(chip.key)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                    filterType === chip.key
+                      ? "bg-amber-600 text-white shadow-xs"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <select
             value={sortOrder}
@@ -266,21 +305,29 @@ export default function ReviewPage() {
           </div>
         ) : pendingPlans.length === 0 ? (
           <div className="glass-card rounded-2xl p-8 text-center text-slate-500 text-sm">
-            ไม่มีงานค้างตรวจในขณะนี้ คณะครูส่งงานครบถ้วนแล้วครับ
+            ไม่มีงานค้างตรวจในหมวดนี้
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {pendingPlans.map((p) => {
               const order = orderMap[p.id];
+              const isPermMemo = isPermissionMemoPlan(p);
               const { dateText, timeText } = formatThaiDateTime(p.created_at);
               return (
               <div
                 key={p.id}
-                className="glass-card rounded-2xl p-5 border border-white/80 space-y-3 hover:shadow-md transition-all"
+                className={`glass-card rounded-2xl p-5 border space-y-3 hover:shadow-md transition-all ${
+                  isPermMemo ? "border-teal-300 bg-teal-50/20" : "border-white/80"
+                }`}
               >
                 <div className="flex justify-between items-start gap-2">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
+                      {isPermMemo && (
+                        <span className="px-2 py-0.5 rounded-md bg-teal-100 text-teal-800 border border-teal-300 text-[11px] font-bold">
+                          📝 ใบขออนุญาตใช้แผน (1 ใบ/วิชา)
+                        </span>
+                      )}
                       {order && (
                         <span className="px-2 py-0.5 rounded-md bg-pink-50 text-pink-700 border border-pink-200 text-[11px] font-bold">
                           ส่งครั้งที่ {order.teacherOrder} ({p.subject} #{order.subjectOrder})
@@ -294,12 +341,14 @@ export default function ReviewPage() {
                   </div>
                   <span
                     className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 ${
-                      p.status === "รอตรวจแผน"
-                        ? "bg-amber-100 text-amber-800"
-                        : "bg-purple-100 text-purple-800"
+                      isPermMemo
+                        ? "bg-teal-100 text-teal-800"
+                        : p.status === "รอตรวจแผน"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-purple-100 text-purple-800"
                     }`}
                   >
-                    {p.status}
+                    {isPermMemo ? "รออนุญาตใช้แผน" : p.status}
                   </span>
                 </div>
 
@@ -309,7 +358,7 @@ export default function ReviewPage() {
                   </div>
                   {p.unit_title && (
                     <div>
-                      <b>เรื่อง:</b> {p.unit_title}
+                      <b>{isPermMemo ? "เลขที่/ชั่วโมง:" : "เรื่อง:"}</b> {p.unit_title}
                     </div>
                   )}
                   <div>
@@ -330,9 +379,13 @@ export default function ReviewPage() {
 
                   <button
                     onClick={() => handleOpenPlanModal(p)}
-                    className="px-4 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 to-pink-600 text-white shadow-sm hover:shadow"
+                    className={`px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow-sm hover:shadow ${
+                      isPermMemo
+                        ? "bg-gradient-to-r from-teal-600 to-emerald-600"
+                        : "bg-gradient-to-r from-amber-500 to-pink-600"
+                    }`}
                   >
-                    ตรวจและลงนาม →
+                    {isPermMemo ? "ลงนามใบขออนุญาต →" : "ตรวจและลงนาม →"}
                   </button>
                 </div>
               </div>
@@ -349,7 +402,9 @@ export default function ReviewPage() {
             <div className="shrink-0 flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-2.5">
               <div>
                 <h3 className="font-display font-bold text-base sm:text-lg text-slate-800">
-                  ตรวจแผนและประทับลายเซ็น: {selectedPlan.teacher_name}
+                  {isPermissionMemoPlan(selectedPlan)
+                    ? `ลงนามใบขออนุญาตใช้แผน (บันทึกข้อความ): ${selectedPlan.teacher_name}`
+                    : `ตรวจแผนและประทับลายเซ็น: ${selectedPlan.teacher_name}`}
                 </h3>
                 <p className="text-xs text-slate-500">
                   วิชา {selectedPlan.subject} ({selectedPlan.class_level}) ·{" "}
@@ -418,7 +473,9 @@ export default function ReviewPage() {
                 </label>
 
                 <span className="text-[11px] text-slate-500">
-                  * ผอ. ตรวจครั้งเดียว: หากสั่งแก้ไข ครูแก้แล้วส่งแทนไฟล์เดิมจะผ่านอัตโนมัติ
+                  {isPermissionMemoPlan(selectedPlan)
+                    ? "* ใช้ปากกาสีน้ำเงิน/แดงติ๊กอนุญาต เขียนเหตุผล และวางลายเซ็น ผอ. แล้วกดอนุญาต"
+                    : "* ผอ. ตรวจครั้งเดียว: หากสั่งแก้ไข ครูแก้แล้วส่งแทนไฟล์เดิมจะผ่านอัตโนมัติ"}
                 </span>
               </div>
 
@@ -439,6 +496,25 @@ export default function ReviewPage() {
                     className="py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs sm:text-sm font-bold shadow hover:shadow-md transition-all disabled:opacity-50"
                   >
                     ✔✔ อนุมัติเสร็จสมบูรณ์ (พร้อมประทับลายเซ็น)
+                  </button>
+                </div>
+              ) : isPermissionMemoPlan(selectedPlan) ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => handleReviewAction("แผนต้องแก้ไข", "plan")}
+                    className="py-3 px-4 rounded-xl border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 text-xs sm:text-sm font-bold transition-colors disabled:opacity-50"
+                  >
+                    ✎ ไม่อนุญาต / ส่งกลับให้ครูแก้ไข
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => handleReviewAction("เสร็จสมบูรณ์", "plan_and_post")}
+                    className="py-3 px-4 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 text-white text-xs sm:text-sm font-bold shadow hover:shadow-md transition-all disabled:opacity-50"
+                  >
+                    ✔✔ อนุญาตใช้แผนการสอน (ประทับลายเซ็นเสร็จสมบูรณ์)
                   </button>
                 </div>
               ) : (

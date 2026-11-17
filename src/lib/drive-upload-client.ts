@@ -8,7 +8,7 @@ export interface DriveUploadResult {
 }
 
 export interface DriveUploadOptions {
-  kind?: "plan" | "post" | "review";
+  kind?: "plan" | "post" | "review" | "permission";
   subject?: string;
   classLevel?: string;
   scopeValue?: string;

@@ -19,6 +19,7 @@ const KIND_PREFIX: Record<string, string> = {
   plan: "แผน",
   post: "บันทึกหลังสอน",
   review: "ผอ.ตรวจ",
+  permission: "ขออนุญาตใช้แผน",
 };
 
 function formatBangkokThaiStamp(): string {
