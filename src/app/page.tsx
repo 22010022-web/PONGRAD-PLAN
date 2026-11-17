@@ -35,6 +35,9 @@ export default function DashboardPage() {
   const [sortOrder, setSortOrder] = useState<PlanSortOrder>("newest");
 
   useEffect(() => {
+    if (authLoading || user) {
+      return;
+    }
     let cancelled = false;
     fetch("/api/cms", { cache: "no-store" })
       .then((res) => res.json())
@@ -50,7 +53,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authLoading, user]);
 
   const linkedTeacherId = profile?.teacher_id || teacher?.id || null;
   const hasLinkedTeacherRow = Boolean(linkedTeacherId && !linkedTeacherId.startsWith("00000000-"));
@@ -243,9 +246,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Hero Banner Carousel */}
-      <HomeBannerCarousel banners={banners} bannerSettings={bannerSettings} />
-
       {authLoading || isLoading ? (
         <div className="glass-card rounded-3xl p-12 text-center border border-white/80">
           <Loader2 className="w-8 h-8 animate-spin text-pink-600 mx-auto mb-3" />
@@ -253,6 +253,9 @@ export default function DashboardPage() {
         </div>
       ) : !user ? (
         <>
+          {/* Hero Banner Carousel (แสดงเฉพาะหน้าแรกก่อนเข้าสู่ระบบ) */}
+          <HomeBannerCarousel banners={banners} bannerSettings={bannerSettings} />
+
           <div className="glass-card rounded-3xl p-8 sm:p-12 text-center border border-white/80 space-y-4">
             <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-pink-100 to-purple-100 text-pink-600 flex items-center justify-center shadow-sm">
               <LogIn className="w-8 h-8" />
@@ -344,9 +347,6 @@ export default function DashboardPage() {
           </p>
         </div>
       </div>
-
-      {/* ข่าวสารและประกาศประชาสัมพันธ์ */}
-      <HomeNewsSection news={newsList} />
 
       {/* Teacher Workload Summary Table */}
       <div className="glass-card rounded-3xl p-6 border border-white/80">
