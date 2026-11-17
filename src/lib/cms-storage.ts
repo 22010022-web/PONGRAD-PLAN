@@ -1,9 +1,16 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
-import { BannerItem, NewsItem } from "@/types/cms";
+import {
+  BannerDisplaySettings,
+  BannerItem,
+  DEFAULT_BANNER_SETTINGS,
+  NewsItem,
+  normalizeBannerSettings,
+} from "@/types/cms";
 
 const CMS_NEWS_ROW_ID = "cms_news_v1";
 const CMS_BANNERS_ROW_ID = "cms_banners_v1";
+const CMS_BANNER_SETTINGS_ROW_ID = "cms_banner_settings_v1";
 export const CMS_MEDIA_BUCKET = "cms-media";
 
 export function createPublicSupabase(): SupabaseClient | null {
@@ -15,37 +22,37 @@ export function createPublicSupabase(): SupabaseClient | null {
   });
 }
 
-async function readCollection<T>(
+async function readStoredJson<T>(
   client: SupabaseClient | null,
-  rowId: string
-): Promise<T[]> {
-  if (!client) return [];
+  rowId: string,
+  fallback: T
+): Promise<T> {
+  if (!client) return fallback;
   const { data, error } = await client
     .from("school_settings")
     .select("logo_url")
     .eq("id", rowId)
     .maybeSingle();
 
-  if (error || !data?.logo_url) return [];
+  if (error || !data?.logo_url) return fallback;
   try {
-    const parsed = JSON.parse(data.logo_url);
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
+    return JSON.parse(data.logo_url) as T;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-async function writeCollection<T>(
+async function writeStoredJson<T>(
   client: SupabaseClient,
   rowId: string,
-  items: T[]
+  payload: T
 ): Promise<void> {
   const { error } = await client.from("school_settings").upsert(
     {
       id: rowId,
       school_name: "CMS_DATA_STORE",
       system_title: rowId,
-      logo_url: JSON.stringify(items),
+      logo_url: JSON.stringify(payload),
       updated_at: new Date().toISOString(),
     },
     { onConflict: "id" }
@@ -56,19 +63,41 @@ async function writeCollection<T>(
 }
 
 export async function readAllNews(client: SupabaseClient | null): Promise<NewsItem[]> {
-  return readCollection<NewsItem>(client, CMS_NEWS_ROW_ID);
+  const res = await readStoredJson<unknown>(client, CMS_NEWS_ROW_ID, []);
+  return Array.isArray(res) ? (res as NewsItem[]) : [];
 }
 
 export async function writeAllNews(client: SupabaseClient, items: NewsItem[]): Promise<void> {
-  await writeCollection(client, CMS_NEWS_ROW_ID, items);
+  await writeStoredJson(client, CMS_NEWS_ROW_ID, items);
 }
 
 export async function readAllBanners(client: SupabaseClient | null): Promise<BannerItem[]> {
-  return readCollection<BannerItem>(client, CMS_BANNERS_ROW_ID);
+  const res = await readStoredJson<unknown>(client, CMS_BANNERS_ROW_ID, []);
+  return Array.isArray(res) ? (res as BannerItem[]) : [];
 }
 
 export async function writeAllBanners(client: SupabaseClient, items: BannerItem[]): Promise<void> {
-  await writeCollection(client, CMS_BANNERS_ROW_ID, items);
+  await writeStoredJson(client, CMS_BANNERS_ROW_ID, items);
+}
+
+export async function readBannerSettings(
+  client: SupabaseClient | null
+): Promise<BannerDisplaySettings> {
+  const raw = await readStoredJson<Partial<BannerDisplaySettings> | null>(
+    client,
+    CMS_BANNER_SETTINGS_ROW_ID,
+    DEFAULT_BANNER_SETTINGS
+  );
+  return normalizeBannerSettings(raw);
+}
+
+export async function writeBannerSettings(
+  client: SupabaseClient,
+  settings: Partial<BannerDisplaySettings>
+): Promise<BannerDisplaySettings> {
+  const normalized = normalizeBannerSettings(settings);
+  await writeStoredJson(client, CMS_BANNER_SETTINGS_ROW_ID, normalized);
+  return normalized;
 }
 
 const MIME_TO_EXT: Record<string, string> = {

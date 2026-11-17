@@ -5,7 +5,12 @@ import Link from "next/link";
 import { useAuth } from "@/context/auth-context";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase/client";
 import { LessonPlan, Teacher } from "@/types/database";
-import { BannerItem, NewsItem } from "@/types/cms";
+import {
+  BannerDisplaySettings,
+  BannerItem,
+  DEFAULT_BANNER_SETTINGS,
+  NewsItem,
+} from "@/types/cms";
 import { HomeBannerCarousel, HomeNewsSection } from "@/components/home-showcase";
 import { FileText, CheckCircle2, Clock, FileCheck, LogIn, Loader2, BookOpen } from "lucide-react";
 import {
@@ -21,6 +26,7 @@ export default function DashboardPage() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [banners, setBanners] = useState<BannerItem[]>([]);
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
+  const [bannerSettings, setBannerSettings] = useState<BannerDisplaySettings>(DEFAULT_BANNER_SETTINGS);
   const [isLoading, setIsLoading] = useState(true);
   const [filterTeacher, setFilterTeacher] = useState("");
   const [filterSubject, setFilterSubject] = useState("");
@@ -36,6 +42,7 @@ export default function DashboardPage() {
         if (cancelled) return;
         if (Array.isArray(data?.banners)) setBanners(data.banners);
         if (Array.isArray(data?.news)) setNewsList(data.news);
+        if (data?.bannerSettings) setBannerSettings(data.bannerSettings);
       })
       .catch(() => {
         // ignore cms fetch errors cleanly
@@ -237,7 +244,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Hero Banner Carousel */}
-      <HomeBannerCarousel banners={banners} />
+      <HomeBannerCarousel banners={banners} bannerSettings={bannerSettings} />
 
       {authLoading || isLoading ? (
         <div className="glass-card rounded-3xl p-12 text-center border border-white/80">

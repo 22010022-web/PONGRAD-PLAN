@@ -13,7 +13,13 @@ import {
   Pin,
   X,
 } from "lucide-react";
-import { BannerItem, NewsItem } from "@/types/cms";
+import {
+  BannerDisplaySettings,
+  BannerItem,
+  DEFAULT_BANNER_SETTINGS,
+  NewsItem,
+  resolveBannerAspectRatio,
+} from "@/types/cms";
 
 function formatThaiDate(iso?: string | null): string {
   if (!iso) return "";
@@ -59,11 +65,22 @@ function BannerLinkAction({
   );
 }
 
-export function HomeBannerCarousel({ banners }: { banners: BannerItem[] }) {
+export function HomeBannerCarousel({
+  banners,
+  bannerSettings = DEFAULT_BANNER_SETTINGS,
+}: {
+  banners: BannerItem[];
+  bannerSettings?: BannerDisplaySettings;
+}) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
 
   const safeIndex = banners.length > 0 ? activeIndex % banners.length : 0;
+  const { cssValue: bannerAspectCss } = resolveBannerAspectRatio(bannerSettings);
+  const fitClass =
+    bannerSettings.fitMode === "contain"
+      ? "object-contain bg-slate-900"
+      : "object-cover transition-transform duration-700 group-hover:scale-[1.015]";
 
   useEffect(() => {
     if (banners.length <= 1 || isPaused) return;
@@ -85,41 +102,44 @@ export function HomeBannerCarousel({ banners }: { banners: BannerItem[] }) {
       onMouseLeave={() => setIsPaused(false)}
       className="relative glass-card rounded-3xl overflow-hidden border border-white/80 shadow-lg group"
     >
-      <div className="relative w-full h-48 sm:h-64 md:h-72 bg-slate-900/10 overflow-hidden">
+      <div
+        className="relative w-full min-h-[140px] bg-slate-900/10 overflow-hidden"
+        style={{ aspectRatio: bannerAspectCss }}
+      >
         {current.link_url && !current.title && !current.subtitle ? (
           <BannerLinkAction banner={current} className="block w-full h-full">
             <img
               src={current.image_url}
               alt="แบนเนอร์ประชาสัมพันธ์"
-              className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.015]"
+              className={`w-full h-full ${fitClass}`}
             />
           </BannerLinkAction>
         ) : (
           <img
             src={current.image_url}
             alt={current.title || "แบนเนอร์ประชาสัมพันธ์"}
-            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.015]"
+            className={`w-full h-full ${fitClass}`}
           />
         )}
 
         {hasOverlayText && (current.title || current.subtitle || current.link_url) && (
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/25 to-transparent flex flex-col justify-end p-5 sm:p-7 pointer-events-none">
-            <div className="max-w-3xl space-y-1.5 pointer-events-auto">
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/25 to-transparent flex flex-col justify-end p-3.5 sm:p-6 pointer-events-none">
+            <div className="max-w-3xl space-y-1 pointer-events-auto">
               {current.title && (
-                <h2 className="font-display font-bold text-lg sm:text-2xl text-white drop-shadow-sm">
+                <h2 className="font-display font-bold text-sm sm:text-xl md:text-2xl text-white drop-shadow-sm line-clamp-1 sm:line-clamp-2">
                   {current.title}
                 </h2>
               )}
               {current.subtitle && (
-                <p className="text-xs sm:text-sm text-white/90 line-clamp-2 drop-shadow-sm">
+                <p className="text-[11px] sm:text-sm text-white/90 line-clamp-1 sm:line-clamp-2 drop-shadow-sm">
                   {current.subtitle}
                 </p>
               )}
               {current.link_url && (
-                <div className="pt-1.5">
+                <div className="pt-1">
                   <BannerLinkAction
                     banner={current}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/95 hover:bg-white text-pink-700 text-xs font-bold shadow-md transition-all"
+                    className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-white/95 hover:bg-white text-pink-700 text-[11px] sm:text-xs font-bold shadow-md transition-all"
                   >
                     <span>{current.link_label || "ดูรายละเอียด"}</span>
                     {current.open_in_new_tab ? (

@@ -42,9 +42,71 @@ export interface BannerItem {
   updated_at: string;
 }
 
+export type BannerAspectPreset = "3:1" | "16:5" | "21:9" | "16:9" | "4:1" | "custom";
+
+export interface BannerDisplaySettings {
+  aspectRatioPreset: BannerAspectPreset;
+  customWidth: number;
+  customHeight: number;
+  fitMode: "cover" | "contain";
+}
+
+export const DEFAULT_BANNER_SETTINGS: BannerDisplaySettings = {
+  aspectRatioPreset: "3:1",
+  customWidth: 3,
+  customHeight: 1,
+  fitMode: "cover",
+};
+
+export const BANNER_ASPECT_PRESETS: { value: BannerAspectPreset; label: string; w: number; h: number }[] = [
+  { value: "3:1", label: "3:1 (แนะนำ)", w: 3, h: 1 },
+  { value: "16:5", label: "16:5", w: 16, h: 5 },
+  { value: "4:1", label: "4:1 (แถบยาว)", w: 4, h: 1 },
+  { value: "21:9", label: "21:9 (ภาพยนตร์)", w: 21, h: 9 },
+  { value: "16:9", label: "16:9 (มาตรฐาน)", w: 16, h: 9 },
+  { value: "custom", label: "กำหนดเอง", w: 3, h: 1 },
+];
+
+export function normalizeBannerSettings(raw?: Partial<BannerDisplaySettings> | null): BannerDisplaySettings {
+  const validPreset = BANNER_ASPECT_PRESETS.some((p) => p.value === raw?.aspectRatioPreset)
+    ? (raw!.aspectRatioPreset as BannerAspectPreset)
+    : DEFAULT_BANNER_SETTINGS.aspectRatioPreset;
+
+  const w = Math.max(1, Math.min(10000, Math.round(Number(raw?.customWidth) || DEFAULT_BANNER_SETTINGS.customWidth)));
+  const h = Math.max(1, Math.min(10000, Math.round(Number(raw?.customHeight) || DEFAULT_BANNER_SETTINGS.customHeight)));
+
+  return {
+    aspectRatioPreset: validPreset,
+    customWidth: w,
+    customHeight: h,
+    fitMode: raw?.fitMode === "contain" ? "contain" : "cover",
+  };
+}
+
+export function resolveBannerAspectRatio(settings?: Partial<BannerDisplaySettings> | null): {
+  cssValue: string;
+  label: string;
+} {
+  const norm = normalizeBannerSettings(settings);
+  if (norm.aspectRatioPreset !== "custom") {
+    const found = BANNER_ASPECT_PRESETS.find((p) => p.value === norm.aspectRatioPreset);
+    if (found) {
+      return {
+        cssValue: `${found.w} / ${found.h}`,
+        label: found.value,
+      };
+    }
+  }
+  return {
+    cssValue: `${norm.customWidth} / ${norm.customHeight}`,
+    label: `${norm.customWidth}:${norm.customHeight}`,
+  };
+}
+
 export interface CmsPublicPayload {
   banners: BannerItem[];
   news: NewsItem[];
+  bannerSettings?: BannerDisplaySettings;
 }
 
 export type NewsScheduleState = "draft" | "scheduled" | "active" | "expired";

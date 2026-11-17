@@ -26,12 +26,17 @@ import {
   X,
 } from "lucide-react";
 import {
+  BANNER_ASPECT_PRESETS,
+  BannerAspectPreset,
+  BannerDisplaySettings,
   BannerItem,
+  DEFAULT_BANNER_SETTINGS,
   getBannerScheduleState,
   getNewsScheduleState,
   NEWS_CATEGORIES,
   NewsItem,
   NewsStatus,
+  resolveBannerAspectRatio,
 } from "@/types/cms";
 
 interface NotifyPayload {
@@ -833,18 +838,58 @@ export function AdminNewsManager({
  * ========================================================================= */
 export function AdminBannerManager({
   banners,
+  bannerSettings = DEFAULT_BANNER_SETTINGS,
   loading,
   onUpdate,
+  onUpdateSettings,
   onNotify,
 }: {
   banners: BannerItem[];
+  bannerSettings?: BannerDisplaySettings;
   loading: boolean;
   onUpdate: (items: BannerItem[]) => void;
+  onUpdateSettings: (settings: BannerDisplaySettings) => void;
   onNotify: (msg: NotifyPayload) => void;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<BannerItem | null>(null);
+
+  // ตั้งค่าสัดส่วนการแสดงผลหน้าแรก (ค่าเริ่มต้น 3:1 หรือปรับเองได้)
+  const [settingsForm, setSettingsForm] = useState<BannerDisplaySettings>(bannerSettings);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  React.useEffect(() => {
+    setSettingsForm(bannerSettings);
+  }, [bannerSettings]);
+
+  const { cssValue: previewAspectCss, label: previewAspectLabel } =
+    resolveBannerAspectRatio(settingsForm);
+  const previewFitClass =
+    settingsForm.fitMode === "contain" ? "object-contain bg-slate-900" : "object-cover";
+
+  const handleSaveDisplaySettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingSettings(true);
+    try {
+      const data = await postAdminCms({
+        action: "save-banner-settings",
+        settings: settingsForm,
+      });
+      if (data.bannerSettings) {
+        onUpdateSettings(data.bannerSettings);
+        setSettingsForm(data.bannerSettings);
+      }
+      onNotify({
+        type: "success",
+        text: `บันทึกสัดส่วนแบนเนอร์ (${previewAspectLabel}) เรียบร้อยแล้ว`,
+      });
+    } catch (err: any) {
+      onNotify({ type: "error", text: err?.message || "บันทึกขนาดแบนเนอร์ไม่สำเร็จ" });
+    } finally {
+      setSavingSettings(false);
+    }
+  };
 
   const [title, setTitle] = useState("");
   const [subtitle, setSubtitle] = useState("");
@@ -995,6 +1040,123 @@ export function AdminBannerManager({
         </button>
       </div>
 
+      {/* ตั้งค่าขนาด / สัดส่วนแสดงผลแบนเนอร์หน้าแรก (ค่าเริ่มต้น 3:1 หรือกำหนดเอง) */}
+      <form
+        onSubmit={handleSaveDisplaySettings}
+        className="glass-card rounded-2xl p-4 border border-indigo-200/70 bg-indigo-50/30 space-y-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-xs sm:text-sm font-bold text-slate-800">
+              สัดส่วนและขนาดแสดงผลบนหน้าแรก{" "}
+              <span className="ml-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold">
+                ปัจจุบัน {previewAspectLabel}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              เลือกสัดส่วนสำเร็จรูป (เช่น 3:1 สำหรับภาพ 1200×400) หรือกด &quot;กำหนดเอง&quot; เพื่อกรอกสัดส่วน กว้าง : สูง ได้ตามต้องการ
+            </p>
+          </div>
+          <button
+            type="submit"
+            disabled={savingSettings}
+            className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs disabled:opacity-50 inline-flex items-center gap-1.5"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>{savingSettings ? "กำลังบันทึก..." : "บันทึกขนาดแบนเนอร์"}</span>
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {BANNER_ASPECT_PRESETS.map((preset) => (
+            <button
+              key={preset.value}
+              type="button"
+              onClick={() =>
+                setSettingsForm((prev) => ({
+                  ...prev,
+                  aspectRatioPreset: preset.value as BannerAspectPreset,
+                  ...(preset.value !== "custom"
+                    ? { customWidth: preset.w, customHeight: preset.h }
+                    : {}),
+                }))
+              }
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                settingsForm.aspectRatioPreset === preset.value
+                  ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4 pt-1 border-t border-indigo-100/80">
+          {settingsForm.aspectRatioPreset === "custom" && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-700">กำหนดสัดส่วนเอง:</span>
+              <input
+                type="number"
+                min={1}
+                max={10000}
+                value={settingsForm.customWidth}
+                onChange={(e) =>
+                  setSettingsForm((prev) => ({
+                    ...prev,
+                    customWidth: Math.max(1, Number(e.target.value) || 1),
+                  }))
+                }
+                aria-label="ความกว้างตามสัดส่วน"
+                className="w-20 px-2.5 py-1 rounded-xl border border-slate-300 bg-white text-xs font-bold text-center"
+              />
+              <span className="font-bold text-slate-500">:</span>
+              <input
+                type="number"
+                min={1}
+                max={10000}
+                value={settingsForm.customHeight}
+                onChange={(e) =>
+                  setSettingsForm((prev) => ({
+                    ...prev,
+                    customHeight: Math.max(1, Number(e.target.value) || 1),
+                  }))
+                }
+                aria-label="ความสูงตามสัดส่วน"
+                className="w-20 px-2.5 py-1 rounded-xl border border-slate-300 bg-white text-xs font-bold text-center"
+              />
+              <span className="text-[11px] text-slate-500">(เช่น 3:1 หรือ 1200:350)</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-700">การจัดวางภาพ:</span>
+            <button
+              type="button"
+              onClick={() => setSettingsForm((prev) => ({ ...prev, fitMode: "cover" }))}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border ${
+                settingsForm.fitMode === "cover"
+                  ? "bg-slate-800 text-white border-slate-800"
+                  : "bg-white text-slate-600 border-slate-200"
+              }`}
+            >
+              ขยายเต็มกรอบ (Cover)
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsForm((prev) => ({ ...prev, fitMode: "contain" }))}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border ${
+                settingsForm.fitMode === "contain"
+                  ? "bg-slate-800 text-white border-slate-800"
+                  : "bg-white text-slate-600 border-slate-200"
+              }`}
+            >
+              แสดงครบทั้งภาพ (Contain)
+            </button>
+          </div>
+        </div>
+      </form>
+
       {loading ? (
         <div className="glass-card rounded-2xl p-10 text-center text-xs text-slate-500">
           <Loader2 className="w-6 h-6 animate-spin text-indigo-600 mx-auto mb-2" />
@@ -1037,11 +1199,14 @@ export function AdminBannerManager({
                     </button>
                   </div>
 
-                  <div className="w-full md:w-52 aspect-[16/6] rounded-xl overflow-hidden bg-slate-100 border border-slate-200 relative">
+                  <div
+                    className="w-full md:w-52 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 relative"
+                    style={{ aspectRatio: previewAspectCss }}
+                  >
                     <img
                       src={item.image_url}
                       alt={item.title || `แบนเนอร์ ${idx + 1}`}
-                      className="w-full h-full object-cover"
+                      className={`w-full h-full ${previewFitClass}`}
                     />
                     <span className="absolute top-1.5 left-1.5 px-2 py-0.5 rounded-full bg-slate-900/75 text-white text-[10px] font-bold">
                       #{idx + 1}
@@ -1170,7 +1335,7 @@ export function AdminBannerManager({
             <form onSubmit={handleSaveBanner} className="space-y-4">
               <div className="space-y-2">
                 <label className="block text-xs font-bold text-slate-700">
-                  ภาพแบนเนอร์ * (แนะนำภาพแนวนอนอัตราส่วนกว้าง เช่น 16:5 หรือ 1200×400 px)
+                  ภาพแบนเนอร์ * (สัดส่วนปัจจุบัน {previewAspectLabel} — เช่น 1200×400 px สำหรับ 3:1)
                 </label>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold cursor-pointer">
@@ -1196,8 +1361,11 @@ export function AdminBannerManager({
                   />
                 </div>
                 {imageUrl && (
-                  <div className="relative rounded-2xl overflow-hidden border border-slate-200 aspect-[16/6] bg-slate-100">
-                    <img src={imageUrl} alt="พรีวิวแบนเนอร์" className="w-full h-full object-cover" />
+                  <div
+                    className="relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-100"
+                    style={{ aspectRatio: previewAspectCss }}
+                  >
+                    <img src={imageUrl} alt="พรีวิวแบนเนอร์" className={`w-full h-full ${previewFitClass}`} />
                     {(title || subtitle) && (
                       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-900/80 via-slate-900/40 to-transparent p-3 text-white">
                         {title && <div className="font-bold text-sm">{title}</div>}

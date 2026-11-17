@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import { createAdminSupabase } from "@/lib/server-auth";
-import { createPublicSupabase, readAllBanners, readAllNews } from "@/lib/cms-storage";
-import { getActiveBanners, getActivePublishedNews } from "@/types/cms";
+import {
+  createPublicSupabase,
+  readAllBanners,
+  readAllNews,
+  readBannerSettings,
+} from "@/lib/cms-storage";
+import {
+  DEFAULT_BANNER_SETTINGS,
+  getActiveBanners,
+  getActivePublishedNews,
+} from "@/types/cms";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,14 +20,15 @@ export async function GET() {
     const client = createAdminSupabase() || createPublicSupabase();
     if (!client) {
       return NextResponse.json(
-        { banners: [], news: [] },
+        { banners: [], news: [], bannerSettings: DEFAULT_BANNER_SETTINGS },
         { headers: { "Cache-Control": "no-store" } }
       );
     }
 
-    const [allBanners, allNews] = await Promise.all([
+    const [allBanners, allNews, bannerSettings] = await Promise.all([
       readAllBanners(client),
       readAllNews(client),
+      readBannerSettings(client),
     ]);
 
     const nowMs = Date.now();
@@ -26,13 +36,14 @@ export async function GET() {
       {
         banners: getActiveBanners(allBanners, nowMs),
         news: getActivePublishedNews(allNews, nowMs),
+        bannerSettings,
       },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (err) {
     console.error("GET /api/cms error:", err);
     return NextResponse.json(
-      { banners: [], news: [] },
+      { banners: [], news: [], bannerSettings: DEFAULT_BANNER_SETTINGS },
       { headers: { "Cache-Control": "no-store" } }
     );
   }

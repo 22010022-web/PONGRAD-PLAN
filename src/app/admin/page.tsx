@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { LessonPlan, PlanStatus, Teacher } from "@/types/database";
-import { BannerItem, NewsItem } from "@/types/cms";
+import { BannerDisplaySettings, BannerItem, DEFAULT_BANNER_SETTINGS, NewsItem } from "@/types/cms";
 import { AdminBannerManager, AdminNewsManager } from "@/components/admin-cms-manager";
 import {
   Settings,
@@ -180,6 +180,8 @@ export default function AdminPage() {
   // 4. News & Banner CMS states
   const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
   const [bannerItems, setBannerItems] = useState<BannerItem[]>([]);
+  const [bannerSettings, setBannerSettings] =
+    useState<BannerDisplaySettings>(DEFAULT_BANNER_SETTINGS);
   const [loadingCms, setLoadingCms] = useState(true);
 
   const loadCmsData = async () => {
@@ -197,6 +199,7 @@ export default function AdminPage() {
       if (res.ok && data) {
         if (Array.isArray(data.news)) setNewsItems(data.news);
         if (Array.isArray(data.banners)) setBannerItems(data.banners);
+        if (data.bannerSettings) setBannerSettings(data.bannerSettings);
       }
     } finally {
       setLoadingCms(false);
@@ -1068,8 +1071,10 @@ export default function AdminPage() {
       {activeTab === "banners" && (
         <AdminBannerManager
           banners={bannerItems}
+          bannerSettings={bannerSettings}
           loading={loadingCms}
           onUpdate={setBannerItems}
+          onUpdateSettings={setBannerSettings}
           onNotify={setAlert}
         />
       )}
