@@ -192,6 +192,7 @@ export default function AdminPage() {
   const [portalSettings, setPortalSettings] =
     useState<PortalDisplaySettings>(DEFAULT_PORTAL_SETTINGS);
   const [savingPortalToggle, setSavingPortalToggle] = useState(false);
+  const [savingFavicon, setSavingFavicon] = useState(false);
   const [loadingCms, setLoadingCms] = useState(true);
 
   const loadCmsData = async () => {
@@ -217,43 +218,106 @@ export default function AdminPage() {
     }
   };
 
+  const savePortalSettingsUpdate = async (
+    partial: Partial<PortalDisplaySettings>,
+    successMessage: string
+  ) => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่");
+    const nextSettings: PortalDisplaySettings = { ...portalSettings, ...partial };
+    const res = await fetch("/api/admin/cms", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        action: "save-portal-settings",
+        settings: nextSettings,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || "บันทึกการตั้งค่าไม่สำเร็จ");
+    setPortalSettings(data.portalSettings || nextSettings);
+    setAlert({ type: "success", text: successMessage });
+  };
+
   const handleTogglePublicDashboard = async () => {
     setSavingPortalToggle(true);
     setAlert(null);
     const nextValue = !portalSettings.showPublicDashboard;
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่");
-      const res = await fetch("/api/admin/cms", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          action: "save-portal-settings",
-          settings: { showPublicDashboard: nextValue },
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "บันทึกการตั้งค่าหน้าแรกไม่สำเร็จ");
-      if (data.portalSettings) {
-        setPortalSettings(data.portalSettings);
-      } else {
-        setPortalSettings({ showPublicDashboard: nextValue });
-      }
-      setAlert({
-        type: "success",
-        text: nextValue
+      await savePortalSettingsUpdate(
+        { showPublicDashboard: nextValue },
+        nextValue
           ? "เปิดแสดงแดชบอร์ดแบบรวมบนหน้าแรกเรียบร้อยแล้ว (ผู้เยี่ยมชมและครูก่อนล็อกอินสามารถดูภาพรวมทั้งโรงเรียนได้)"
-          : "ซ่อนแดชบอร์ดแบบรวมบนหน้าแรกเรียบร้อยแล้ว (ต้องเข้าสู่ระบบก่อนจึงจะดูข้อมูลได้)",
-      });
+          : "ซ่อนแดชบอร์ดแบบรวมบนหน้าแรกเรียบร้อยแล้ว (ต้องเข้าสู่ระบบก่อนจึงจะดูข้อมูลได้)"
+      );
     } catch (err: any) {
       setAlert({ type: "error", text: err?.message || "อัปเดตการตั้งค่าหน้าแรกไม่สำเร็จ" });
     } finally {
       setSavingPortalToggle(false);
+    }
+  };
+
+  const handleFaviconFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setSavingFavicon(true);
+    setAlert(null);
+    try {
+      let dataUrl = "";
+      const isIco =
+        file.type === "image/x-icon" ||
+        file.type === "image/vnd.microsoft.icon" ||
+        file.name.toLowerCase().endsWith(".ico");
+      if (isIco) {
+        dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("อ่านไฟล์ไอคอนไม่สำเร็จ"));
+          reader.readAsDataURL(file);
+        });
+      } else {
+        dataUrl = await resizeImageToDataUrl(file, 128);
+      }
+
+      await savePortalSettingsUpdate(
+        { faviconUrl: dataUrl },
+        "อัปเดตไอคอนแท็บเบราว์เซอร์ (Favicon) เรียบร้อยแล้ว!"
+      );
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("favicon-updated", { detail: { version: Date.now() } })
+        );
+      }
+    } catch (err: any) {
+      setAlert({ type: "error", text: err?.message || "อัปโหลดไอคอนแท็บเว็บไม่สำเร็จ" });
+    } finally {
+      setSavingFavicon(false);
+    }
+  };
+
+  const handleResetFavicon = async () => {
+    setSavingFavicon(true);
+    setAlert(null);
+    try {
+      await savePortalSettingsUpdate(
+        { faviconUrl: null },
+        "เปลี่ยนกลับไปใช้โลโก้โรงเรียนเป็นไอคอนแท็บเว็บเรียบร้อยแล้ว"
+      );
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("favicon-updated", { detail: { version: Date.now() } })
+        );
+      }
+    } catch (err: any) {
+      setAlert({ type: "error", text: err?.message || "รีเซ็ตไอคอนไม่สำเร็จ" });
+    } finally {
+      setSavingFavicon(false);
     }
   };
 
@@ -693,6 +757,60 @@ export default function AdminPage() {
                 </>
               )}
             </button>
+          </div>
+
+          {/* ไอคอนแท็บเบราว์เซอร์ (Favicon) */}
+          <div className="glass-card rounded-3xl p-5 border border-white/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-slate-50 border border-slate-200 p-1.5 flex items-center justify-center shrink-0 shadow-xs overflow-hidden">
+                {portalSettings.faviconUrl || logoUrl ? (
+                  <img
+                    src={portalSettings.faviconUrl || logoUrl}
+                    alt="พรีวิวไอคอนแท็บเว็บ"
+                    className="w-full h-full object-contain rounded-xl"
+                  />
+                ) : (
+                  <div className="w-full h-full rounded-xl bg-gradient-to-tr from-pink-600 to-amber-500 flex items-center justify-center text-white font-bold text-xs">
+                    PR
+                  </div>
+                )}
+              </div>
+              <div className="space-y-0.5">
+                <h3 className="font-bold text-slate-800 text-sm">
+                  ไอคอนแท็บเบราว์เซอร์ (Favicon)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  {portalSettings.faviconUrl
+                    ? "กำลังใช้ไอคอนที่อัปโหลดแยกเฉพาะแท็บเว็บ"
+                    : "ค่าเริ่มต้นจะใช้โลโก้โรงเรียนด้านล่างโดยอัตโนมัติ (อัปโหลดแยกได้หากต้องการภาพเฉพาะ)"}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <label className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer shadow-xs">
+                <Upload className="w-3.5 h-3.5" />
+                <span>{savingFavicon ? "กำลังบันทึก..." : "เปลี่ยนไอคอนแท็บเว็บ"}</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml,image/x-icon,.ico"
+                  disabled={savingFavicon}
+                  onChange={handleFaviconFilePick}
+                  className="hidden"
+                />
+              </label>
+              {portalSettings.faviconUrl && (
+                <button
+                  type="button"
+                  disabled={savingFavicon}
+                  onClick={handleResetFavicon}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold disabled:opacity-50"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  ใช้โลโก้โรงเรียน
+                </button>
+              )}
+            </div>
           </div>
 
           <form

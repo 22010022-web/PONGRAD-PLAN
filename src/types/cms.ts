@@ -105,17 +105,21 @@ export function resolveBannerAspectRatio(settings?: Partial<BannerDisplaySetting
 
 export interface PortalDisplaySettings {
   showPublicDashboard: boolean;
+  faviconUrl?: string | null;
 }
 
 export const DEFAULT_PORTAL_SETTINGS: PortalDisplaySettings = {
   showPublicDashboard: false,
+  faviconUrl: null,
 };
 
 export function normalizePortalSettings(
   raw?: Partial<PortalDisplaySettings> | null
 ): PortalDisplaySettings {
+  const faviconRaw = typeof raw?.faviconUrl === "string" ? raw.faviconUrl.trim() : "";
   return {
     showPublicDashboard: Boolean(raw?.showPublicDashboard),
+    faviconUrl: faviconRaw || null,
   };
 }
 

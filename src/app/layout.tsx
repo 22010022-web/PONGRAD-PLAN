@@ -21,6 +21,11 @@ const prompt = Prompt({
 export const metadata: Metadata = {
   title: "ระบบส่งแผนการสอนออนไลน์ - รร.วัดโป่งแรด",
   description: "ระบบส่งแผนการสอนออนไลน์และบันทึกหลังสอน โรงเรียนวัดโป่งแรด (ปคุณวิทยาคาร)",
+  icons: {
+    icon: "/api/favicon",
+    shortcut: "/api/favicon",
+    apple: "/api/favicon",
+  },
 };
 
 export default function RootLayout({

@@ -83,6 +83,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isConfigured]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const applyFaviconHref = (href: string) => {
+      let iconEl = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+      if (!iconEl) {
+        iconEl = document.createElement("link");
+        iconEl.rel = "icon";
+        document.head.appendChild(iconEl);
+      }
+      iconEl.href = href;
+    };
+
+    const handleCustomFavicon = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ version?: number }>).detail;
+      applyFaviconHref(`/api/favicon?v=${detail?.version || Date.now()}`);
+    };
+
+    if (schoolSettings.logo_url) {
+      applyFaviconHref(`/api/favicon?v=${encodeURIComponent(schoolSettings.logo_url.slice(0, 48))}`);
+    }
+
+    window.addEventListener("favicon-updated", handleCustomFavicon);
+    return () => {
+      window.removeEventListener("favicon-updated", handleCustomFavicon);
+    };
+  }, [schoolSettings.logo_url]);
+
   const checkSchema = useCallback(async () => {
     if (!isConfigured) {
       setIsSchemaReady(false);

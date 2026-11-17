@@ -217,7 +217,11 @@ export async function POST(req: Request) {
     }
 
     if (action === "save-portal-settings") {
-      const savedPortal = await writePortalSettings(client, body?.settings || {});
+      const currentPortal = await readPortalSettings(client);
+      const savedPortal = await writePortalSettings(client, {
+        ...currentPortal,
+        ...(body?.settings || {}),
+      });
       return NextResponse.json({ success: true, portalSettings: savedPortal });
     }
 
