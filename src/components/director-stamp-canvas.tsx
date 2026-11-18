@@ -549,6 +549,36 @@ function renderIncrementalPenSegments(
   ctx.restore();
 }
 
+/**
+ * ปิดปลายเส้นปากกาช่วงสุดท้ายตอนยกปากกา (O(1))
+ * เพื่อไม่ต้องวาดลายเส้นทั้งหน้าใหม่ทุกครั้งที่ยกปากกาบน Chrome iPad (WKWebView)
+ */
+function renderFinalPenSegmentTail(
+  ctx: CanvasRenderingContext2D,
+  stroke: PenStroke,
+  mmToPx: number
+) {
+  const pts = stroke.points;
+  if (!pts || pts.length < 2) return;
+  const p0 = pts[pts.length - 2];
+  const p1 = pts[pts.length - 1];
+  const basePx = Math.max(1.2, stroke.baseWidthMm * mmToPx);
+  const midX = ((p0.xMm + p1.xMm) / 2) * mmToPx;
+  const midY = ((p0.yMm + p1.yMm) / 2) * mmToPx;
+  const pressure = ((p0.p || 1) + (p1.p || 1)) / 2;
+
+  ctx.save();
+  ctx.strokeStyle = stroke.color;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(0.9, basePx * pressure);
+  ctx.beginPath();
+  ctx.moveTo(midX, midY);
+  ctx.lineTo(p1.xMm * mmToPx, p1.yMm * mmToPx);
+  ctx.stroke();
+  ctx.restore();
+}
+
 async function normalizeSignatureToBlueTransparentDataUrl(srcUrl: string): Promise<string> {
   const img = new Image();
   img.crossOrigin = "anonymous";
@@ -667,6 +697,7 @@ export function DirectorStampCanvas({
   const [draftTextShowBorder, setDraftTextShowBorder] = useState(false);
   const textBoxInputRef = useRef<HTMLTextAreaElement | null>(null);
 
+  const lastTextTapRef = useRef<{ id: string; time: number } | null>(null);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
@@ -828,26 +859,16 @@ export function DirectorStampCanvas({
 
   const attachCanvasTouchGuard = useCallback((el: HTMLCanvasElement | null) => {
     if (!el || touchGuardCleanupMapRef.current.has(el)) return;
-    const preventStylusOrDrawTouch = (ev: TouchEvent) => {
-      const hasStylus =
-        Array.from(ev.touches).some((t: any) => t?.touchType === "stylus") ||
-        Array.from(ev.changedTouches).some((t: any) => t?.touchType === "stylus");
-      // บล็อก WebKit / iPadOS Scribble จากการแทรกแซงลายเส้น Apple Pencil บน canvas โดยตรง (non-passive)
-      if (
-        hasStylus ||
-        activeStrokeRef.current ||
-        creatingShapeRef.current ||
-        transformShapeRef.current ||
-        !ipadPencilOnlyRef.current
-      ) {
-        if (ev.cancelable) ev.preventDefault();
-      }
+    const preventNativeWebKitTouch = (ev: TouchEvent) => {
+      // ปิด native gesture/Pull-to-Refresh/Back-Swipe ของ Chrome iPad (WKWebView) และ Scribble บน <canvas>
+      // โดย PointerEvent สำหรับทั้งปากกา (วาด) และนิ้ว (panStartRef เลื่อนหน้า) ยังทำงานครบถ้วน
+      if (ev.cancelable) ev.preventDefault();
     };
-    el.addEventListener("touchstart", preventStylusOrDrawTouch, { passive: false });
-    el.addEventListener("touchmove", preventStylusOrDrawTouch, { passive: false });
+    el.addEventListener("touchstart", preventNativeWebKitTouch, { passive: false });
+    el.addEventListener("touchmove", preventNativeWebKitTouch, { passive: false });
     touchGuardCleanupMapRef.current.set(el, () => {
-      el.removeEventListener("touchstart", preventStylusOrDrawTouch);
-      el.removeEventListener("touchmove", preventStylusOrDrawTouch);
+      el.removeEventListener("touchstart", preventNativeWebKitTouch);
+      el.removeEventListener("touchmove", preventNativeWebKitTouch);
     });
   }, []);
 
@@ -2053,6 +2074,20 @@ export function DirectorStampCanvas({
           y <= tb.y + tb.h + 4
         ) {
           e.preventDefault();
+          const prevTap = lastTextTapRef.current;
+          const nowTap = performance.now();
+          if (prevTap && prevTap.id === tb.id && nowTap - prevTap.time < 380) {
+            lastTextTapRef.current = null;
+            if (sidebarCollapsed) {
+              setSidebarCollapsed(false);
+            }
+            setTimeout(() => {
+              textBoxInputRef.current?.focus();
+              textBoxInputRef.current?.select();
+            }, 60);
+          } else {
+            lastTextTapRef.current = { id: tb.id, time: nowTap };
+          }
           selectTextBoxPlacement(tb);
           dragTextRef.current = {
             pointerId: e.pointerId,
@@ -2511,7 +2546,25 @@ export function DirectorStampCanvas({
         prevShapes: curShapes,
         nextShapes: curShapes,
       });
-      redrawPageCanvas(targetPage);
+
+      const hasTopLayerItems =
+        textPlacementsRef.current.some((t) => t.pageNumber === targetPage) ||
+        (layoutRef.current.showSignatureOnDoc &&
+          sigPlacementsRef.current.some((s) => s.pageNumber === targetPage));
+      const cv = canvasRefs.current[targetPage];
+      const ctx = cv?.getContext("2d");
+
+      // หากเป็นเส้นปากกาทึบและไม่มีข้อความ/ลายเซ็นซ้อนด้านบน ให้ปิดปลายเส้นแบบ O(1) แทนการวาดทั้งหน้าใหม่ทุกครั้งที่ยกปากกา
+      if (
+        !hasTopLayerItems &&
+        finished.tool === "pen" &&
+        (finished.opacity ?? 1) >= 0.99 &&
+        ctx
+      ) {
+        renderFinalPenSegmentTail(ctx, finished, MM_TO_PX);
+      } else {
+        redrawPageCanvas(targetPage);
+      }
 
       if (targetPage !== pageNumberRef.current) {
         setPageNumber(targetPage);
@@ -4143,7 +4196,8 @@ export function DirectorStampCanvas({
             <div
               ref={scrollContainerRef}
               onScroll={handleContainerScroll}
-              className="w-full h-full overflow-auto rounded-xl border border-slate-300 bg-slate-300/60 p-2 sm:p-3"
+              style={{ overscrollBehavior: "none" }}
+              className="w-full h-full overflow-auto overscroll-none rounded-xl border border-slate-300 bg-slate-300/60 p-2 sm:p-3"
             >
               <div className="min-w-full w-fit mx-auto flex flex-col items-center gap-3">
                 {pageListToRender.map((pNum) => renderPageSlot(pNum))}

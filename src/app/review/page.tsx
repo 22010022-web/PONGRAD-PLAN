@@ -56,16 +56,22 @@ export default function ReviewPage() {
     loadPlansForReview();
   }, [user]);
 
-  // ซ่อน Scrollbar ของหน้าเว็บหลักด้านขวาสุดเมื่อเปิดหน้าต่างตรวจแผน เพื่อให้เลื่อนเฉพาะในกรอบ PDF เท่านั้น
+  // ซ่อน Scrollbar ของหน้าเว็บหลักด้านขวาสุด และปิด Pull-to-Refresh (Chrome iPad) เมื่อเปิดหน้าต่างตรวจแผน
   useEffect(() => {
     if (!selectedPlan || typeof document === "undefined") return;
     const prevHtmlOverflow = document.documentElement.style.overflow;
     const prevBodyOverflow = document.body.style.overflow;
+    const prevHtmlOverscroll = document.documentElement.style.overscrollBehavior;
+    const prevBodyOverscroll = document.body.style.overscrollBehavior;
     document.documentElement.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
+    document.documentElement.style.overscrollBehavior = "none";
+    document.body.style.overscrollBehavior = "none";
     return () => {
       document.documentElement.style.overflow = prevHtmlOverflow;
       document.body.style.overflow = prevBodyOverflow;
+      document.documentElement.style.overscrollBehavior = prevHtmlOverscroll;
+      document.body.style.overscrollBehavior = prevBodyOverscroll;
     };
   }, [selectedPlan]);
 
@@ -431,7 +437,7 @@ export default function ReviewPage() {
 
       {/* Review & Interactive Stamp Modal */}
       {selectedPlan && (
-        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-1.5 sm:p-2.5 bg-slate-900/55 backdrop-blur-sm overflow-hidden">
+        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-1.5 sm:p-2.5 bg-slate-900/55 backdrop-blur-sm overflow-hidden overscroll-none">
           <div className="max-w-[98vw] xl:max-w-[1540px] w-full glass-panel rounded-2xl sm:rounded-3xl p-2.5 sm:p-4 border border-white/80 shadow-2xl flex flex-col gap-2 h-[96vh] overflow-hidden">
             <div className="shrink-0 flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-2">
               <div>
