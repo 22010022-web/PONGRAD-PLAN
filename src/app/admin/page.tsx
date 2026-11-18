@@ -1050,6 +1050,57 @@ export default function AdminPage() {
                 )}
               </div>
             )}
+
+            {/* คู่มือคำสั่งสำรองกรณี LINE Push หมดเครดิต (Reply API ฟรี 0 เครดิต) */}
+            <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-xs sm:text-sm font-bold text-indigo-950">
+                  💬 คำสั่งพิมพ์ในกลุ่ม LINE เมื่อเครดิต Push รายเดือนหมด (ฟรี 0 เครดิต / ไม่จำกัด)
+                </h4>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                  Reply Token ฟรีไม่อั้น
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                เมื่อโควตาแจ้งเตือนอัตโนมัติ (Push) เต็มในแต่ละเดือน ครูและ ผอ. ยังพิมพ์คำสั่งด้านล่างในกลุ่ม LINE เพื่อให้บอทตอบการ์ดพร้อมปุ่มกดเข้าเว็บได้ทันทีโดยไม่เสียโควตาเลย:
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px]">
+                <div className="p-3 rounded-xl bg-white border border-pink-200/80 space-y-1">
+                  <div className="font-bold text-pink-700">👩‍🏫 คำสั่งฝั่งครูผู้สอน</div>
+                  <ul className="space-y-1 text-slate-700">
+                    <li>
+                      • <b>ส่งงาน</b> หรือ <b>ส่งงาน ชื่อครู</b> : แสดงเมนูลัดส่งงาน + งานล่าสุด
+                    </li>
+                    <li>
+                      • <b>งานแก้ไข</b> : ดูรายการที่ ผอ. ให้แก้ไข พร้อมหมายเหตุ
+                    </li>
+                    <li>
+                      • <b>ผ่านแล้ว</b> : ดูงานอนุมัติ + โหลดไฟล์ที่ ผอ. เซ็นแล้ว
+                    </li>
+                    <li>
+                      • <b>ขออนุญาต</b> : ดูสถานะใบขออนุญาตใช้แผน (บันทึกข้อความ)
+                    </li>
+                  </ul>
+                </div>
+                <div className="p-3 rounded-xl bg-white border border-indigo-200/80 space-y-1">
+                  <div className="font-bold text-indigo-800">👨‍💼 คำสั่งฝั่ง ผอ. / ภาพรวม</div>
+                  <ul className="space-y-1 text-slate-700">
+                    <li>
+                      • <b>ตรวจงาน</b> / <b>รอตรวจ</b> : แสดงงานรอตรวจทุกประเภท + กดลงนามได้เลย
+                    </li>
+                    <li>
+                      • <b>สรุป</b> : แสดงยอดส่งรวมทั้งโรงเรียน และรายชื่อครูที่ยังไม่ส่ง
+                    </li>
+                    <li>
+                      • <b>เมนู</b> / <b>คำสั่ง</b> : เรียกปุ่มเมนูลัด (Quick Reply) แตะใช้งานได้เลย
+                    </li>
+                    <li>
+                      • <b>ขอไอดี</b> : แสดง ID ของกลุ่ม LINE ปัจจุบัน
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
           </div>
         </form>
         </div>

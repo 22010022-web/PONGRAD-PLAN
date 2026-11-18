@@ -295,15 +295,25 @@ export async function sendLineFlexNotification({
     if (!res.ok) {
       const errText = await res.text();
       console.error("LINE Flex API Push Error:", res.status, errText);
+      const isQuotaLimit = res.status === 429 || /monthly limit/i.test(errText);
       let friendly = `LINE API ปฏิเสธการส่ง (HTTP ${res.status}): ${errText}`;
-      if (res.status === 401) {
+      if (isQuotaLimit) {
+        friendly =
+          "โควตาข้อความแจ้งเตือนอัตโนมัติ (Push) ของ LINE OA เดือนนี้หมดแล้ว — แต่ครูและ ผอ. ยังพิมพ์ 'ส่งงาน', 'ตรวจงาน', 'แก้ไข', 'ผ่านแล้ว' หรือ 'เมนู' ในกลุ่ม LINE เพื่อใช้งานฟรีได้ตลอดเวลา";
+      } else if (res.status === 401) {
         friendly =
           "LINE_CHANNEL_ACCESS_TOKEN ไม่ถูกต้องหรือถูกยกเลิกไปแล้ว กรุณากด Reissue ใน LINE Developers แล้วนำค่าใหม่ไปใส่ใน Vercel และกด Redeploy";
       } else if (res.status === 400 && /to/i.test(errText)) {
         friendly =
           "LINE_GROUP_ID ไม่ถูกต้อง หรือบอทยังไม่ได้อยู่ในกลุ่ม LINE นี้";
       }
-      return { success: false, error: friendly, rawError: errText, status: res.status };
+      return {
+        success: false,
+        quotaExceeded: isQuotaLimit,
+        error: friendly,
+        rawError: errText,
+        status: res.status,
+      };
     }
 
     return { success: true };

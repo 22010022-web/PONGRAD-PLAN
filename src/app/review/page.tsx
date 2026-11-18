@@ -183,8 +183,9 @@ export default function ReviewPage() {
       if (planErr) throw planErr;
 
       // 3. แจ้งเตือนเข้า LINE กลุ่มโรงเรียน
+      let quotaWarning = "";
       try {
-        await fetch("/api/line-notify", {
+        const lineRes = await fetch("/api/line-notify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -193,13 +194,20 @@ export default function ReviewPage() {
             reviewData: reviewRecord,
           }),
         });
+        const lineJson = await lineRes.json().catch(() => ({}));
+        if (lineJson?.quotaExceeded) {
+          quotaWarning =
+            " (โควตา LINE Push เดือนนี้หมดแล้ว — ครูพิมพ์ 'ผ่านแล้ว' หรือ 'งานแก้ไข' ในกลุ่ม LINE เพื่อดูผลฟรีได้เลย)";
+        }
       } catch (lineErr) {
         console.warn("LINE Notify failed:", lineErr);
       }
 
       setMsg({
         type: "success",
-        text: `บันทึกผลการตรวจ [${statusAssigned}] สำเร็จ และส่งแจ้งเตือน LINE เรียบร้อย!`,
+        text: quotaWarning
+          ? `บันทึกผลการตรวจ [${statusAssigned}] สำเร็จ!${quotaWarning}`
+          : `บันทึกผลการตรวจ [${statusAssigned}] สำเร็จ และส่งแจ้งเตือน LINE เรียบร้อย!`,
       });
       setTimeout(() => {
         setSelectedPlan(null);
