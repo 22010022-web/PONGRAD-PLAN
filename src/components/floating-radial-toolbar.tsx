@@ -2,32 +2,62 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowDownToLine,
+  ArrowUpRight,
+  ArrowUpToLine,
+  BoxSelect,
+  Circle,
+  Copy,
+  Droplet,
   Eraser,
   GripHorizontal,
   Hand,
   Highlighter,
+  Layers,
+  Minus,
+  MousePointer2,
   Move,
   Palette,
+  Pencil,
   PenLine,
+  RectangleHorizontal,
   Redo2,
+  RotateCcw,
+  RotateCw,
   SlidersHorizontal,
+  Square,
   Trash2,
+  Triangle,
   Undo2,
   X,
 } from "lucide-react";
+import { PdfShapeItem, SHAPE_LABELS, ShapeKind } from "@/lib/pdf-shapes";
 
 export type PdfWorkspaceToolMode =
   | "move-sig"
+  | "select"
   | "pen"
   | "highlighter"
+  | "pencil"
   | "eraser"
+  | "object-eraser"
+  | "lasso-delete"
+  | "shape"
   | "pan";
+
+export type ToolbarCategoryTab =
+  | "draw"
+  | "erase"
+  | "shapes"
+  | "manage"
+  | "customize";
 
 export const PEN_COLOR_PRESETS = [
   { color: "#dc2626", label: "แดง" },
   { color: "#1a2fa0", label: "น้ำเงิน" },
   { color: "#059669", label: "เขียว" },
   { color: "#7c3aed", label: "ม่วง" },
+  { color: "#ea580c", label: "ส้ม" },
   { color: "#0f172a", label: "ดำ" },
 ];
 
@@ -39,10 +69,21 @@ export const HIGHLIGHTER_COLOR_PRESETS = [
   { color: "#fb923c", label: "ส้ม" },
 ];
 
+export const SHAPE_FILL_PRESETS = [
+  { color: "#fef08a", label: "เหลืองอ่อน" },
+  { color: "#fecdd3", label: "ชมพูอ่อน" },
+  { color: "#bbf7d0", label: "เขียวอ่อน" },
+  { color: "#bae6fd", label: "ฟ้าอ่อน" },
+  { color: "#e9d5ff", label: "ม่วงอ่อน" },
+  { color: "#ffffff", label: "ขาว" },
+];
+
 interface FloatingRadialToolbarProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   toolMode: PdfWorkspaceToolMode;
   onToolModeChange: (mode: PdfWorkspaceToolMode) => void;
+  activeShapeKind: ShapeKind;
+  onActiveShapeKindChange: (kind: ShapeKind) => void;
   penColor: string;
   onPenColorChange: (color: string) => void;
   penWidthMm: number;
@@ -53,6 +94,17 @@ interface FloatingRadialToolbarProps {
   onHighlighterWidthChange: (mm: number) => void;
   eraserRadiusMm: number;
   onEraserRadiusChange: (mm: number) => void;
+  strokeOpacity: number;
+  onStrokeOpacityChange: (opacity: number) => void;
+  shapeFillColor: string;
+  onShapeFillColorChange: (color: string) => void;
+  shapeFillEnabled: boolean;
+  onShapeFillEnabledChange: (enabled: boolean) => void;
+  selectedShape: PdfShapeItem | null;
+  onDuplicateSelectedShape: () => void;
+  onDeleteSelectedShape: () => void;
+  onRotateSelectedShape: (deltaDeg: number) => void;
+  onLayerSelectedShape: (action: "front" | "forward" | "backward" | "back") => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -65,12 +117,12 @@ interface FloatingRadialToolbarProps {
   onExpandedChange?: (expanded: boolean) => void;
 }
 
-const COLLAPSED_SIZE = 52;
-const EXPANDED_DIAMETER = 204;
+const COLLAPSED_SIZE = 54;
+const EXPANDED_DIAMETER = 212;
 const EXPANDED_RADIUS = EXPANDED_DIAMETER / 2;
-const ORBIT_RADIUS = 68;
+const ORBIT_RADIUS = 72;
 const EDGE_MARGIN = 12;
-const IDLE_COLLAPSE_MS = 5500;
+const IDLE_COLLAPSE_MS = 6500;
 
 function clamp(val: number, min: number, max: number) {
   if (max < min) return min;
@@ -81,6 +133,8 @@ export function FloatingRadialToolbar({
   containerRef,
   toolMode,
   onToolModeChange,
+  activeShapeKind,
+  onActiveShapeKindChange,
   penColor,
   onPenColorChange,
   penWidthMm,
@@ -91,6 +145,17 @@ export function FloatingRadialToolbar({
   onHighlighterWidthChange,
   eraserRadiusMm,
   onEraserRadiusChange,
+  strokeOpacity,
+  onStrokeOpacityChange,
+  shapeFillColor,
+  onShapeFillColorChange,
+  shapeFillEnabled,
+  onShapeFillEnabledChange,
+  selectedShape,
+  onDuplicateSelectedShape,
+  onDeleteSelectedShape,
+  onRotateSelectedShape,
+  onLayerSelectedShape,
   canUndo,
   canRedo,
   onUndo,
@@ -103,14 +168,13 @@ export function FloatingRadialToolbar({
   onExpandedChange,
 }: FloatingRadialToolbarProps) {
   const [expanded, setExpanded] = useState(false);
-  const [subPanel, setSubPanel] = useState<"color" | "size" | null>(null);
+  const [subPanel, setSubPanel] = useState<ToolbarCategoryTab | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 760, height: 560 });
 
   useEffect(() => {
     onExpandedChange?.(expanded);
   }, [expanded, onExpandedChange]);
 
-  // ตำแหน่งศูนย์กลางของปุ่มแบบสัมพันธ์กับพื้นที่ PDF (ขอบขวาเป็นค่าเริ่มต้น)
   const [normPos, setNormPos] = useState<{
     x: number | null;
     y: number | null;
@@ -133,7 +197,6 @@ export function FloatingRadialToolbar({
   } | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ติดตามขนาดพื้นที่ PDF เพื่อให้วงกลมไม่ล้นขอบจอเมื่อย่อ/ขยายหน้าต่าง
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -151,7 +214,6 @@ export function FloatingRadialToolbar({
     return () => ro.disconnect();
   }, [containerRef]);
 
-  // เมื่อผู้ใช้เริ่มเขียน/วาดลงบนหน้ากระดาษ PDF ให้ยุบวงกลมหลบขอบจออัตโนมัติ (ถ้าไม่ได้เปิดแผงย่อยค้างไว้)
   const prevCollapseSignalRef = useRef(collapseSignal);
   useEffect(() => {
     if (collapseSignal !== prevCollapseSignalRef.current) {
@@ -185,9 +247,18 @@ export function FloatingRadialToolbar({
         idleTimerRef.current = null;
       }
     };
-  }, [scheduleIdleCollapse, toolMode, penColor, highlighterColor, penWidthMm, highlighterWidthMm, eraserRadiusMm]);
+  }, [
+    scheduleIdleCollapse,
+    toolMode,
+    activeShapeKind,
+    penColor,
+    highlighterColor,
+    penWidthMm,
+    highlighterWidthMm,
+    eraserRadiusMm,
+    strokeOpacity,
+  ]);
 
-  // คำนวณพิกัดจุดศูนย์กลางจริงสำหรับสถานะ "ยุบที่ขอบ" และ "เปิดกางเต็มวง"
   const collapsedRadius = COLLAPSED_SIZE / 2;
   const rawCollapsedX =
     normPos.x !== null
@@ -269,7 +340,6 @@ export function FloatingRadialToolbar({
     setIsDragging(false);
 
     if (!wasTap && !expanded) {
-      // เมื่อลากปุ่มแบบยุบแล้วปล่อย ให้ดูดเข้าขอบซ้ายหรือขวาที่ใกล้กว่าแบบปุ่มลอยบน iPad
       const snapLeft = activeCenterX < containerSize.width / 2;
       setNormPos((prev) => ({
         x: snapLeft
@@ -291,14 +361,31 @@ export function FloatingRadialToolbar({
     scheduleIdleCollapse();
   };
 
+  const renderShapeIcon = (kind: ShapeKind, sizeClass = "w-4 h-4") => {
+    switch (kind) {
+      case "rect":
+        return <Square className={sizeClass} />;
+      case "rounded-rect":
+        return <RectangleHorizontal className={sizeClass} />;
+      case "ellipse":
+        return <Circle className={sizeClass} />;
+      case "triangle":
+        return <Triangle className={sizeClass} />;
+      case "line":
+        return <Minus className={sizeClass} />;
+      case "arrow":
+        return <ArrowUpRight className={sizeClass} />;
+    }
+  };
+
   const activeColor =
     toolMode === "highlighter"
       ? highlighterColor
-      : toolMode === "pen"
+      : toolMode === "pen" || toolMode === "pencil" || toolMode === "shape"
       ? penColor
-      : toolMode === "eraser"
-      ? "#f8fafc"
-      : "#818cf8";
+      : toolMode === "eraser" || toolMode === "object-eraser" || toolMode === "lasso-delete"
+      ? "#f43f5e"
+      : "#6366f1";
 
   const renderActiveToolIcon = (sizeClass = "w-5 h-5") => {
     switch (toolMode) {
@@ -306,8 +393,17 @@ export function FloatingRadialToolbar({
         return <PenLine className={sizeClass} />;
       case "highlighter":
         return <Highlighter className={sizeClass} />;
+      case "pencil":
+        return <Pencil className={sizeClass} />;
       case "eraser":
+      case "object-eraser":
         return <Eraser className={sizeClass} />;
+      case "lasso-delete":
+        return <BoxSelect className={sizeClass} />;
+      case "shape":
+        return renderShapeIcon(activeShapeKind, sizeClass);
+      case "select":
+        return <MousePointer2 className={sizeClass} />;
       case "pan":
         return <Hand className={sizeClass} />;
       default:
@@ -319,14 +415,33 @@ export function FloatingRadialToolbar({
     toolMode === "pen"
       ? "ปากกา"
       : toolMode === "highlighter"
-      ? "ไฮไลต์"
+      ? "เน้นข้อความ"
+      : toolMode === "pencil"
+      ? "ดินสอ"
       : toolMode === "eraser"
       ? "ยางลบ"
+      : toolMode === "object-eraser"
+      ? "ลบวัตถุ"
+      : toolMode === "lasso-delete"
+      ? "เลือกเพื่อลบ"
+      : toolMode === "shape"
+      ? `รูปทรง (${SHAPE_LABELS[activeShapeKind]})`
+      : toolMode === "select"
+      ? "เลือก/ย้ายรูปทรง"
       : toolMode === "pan"
       ? "เลื่อนหน้า"
       : "ย้ายลายเซ็น";
 
-  // 8 ปุ่มรอบวงกลม (มุมเริ่มจากด้านบนไล่ตามเข็มนาฬิกา)
+  const isDrawGroupActive =
+    toolMode === "pen" || toolMode === "highlighter" || toolMode === "pencil";
+  const isEraseGroupActive =
+    toolMode === "eraser" ||
+    toolMode === "object-eraser" ||
+    toolMode === "lasso-delete";
+  const isShapeGroupActive = toolMode === "shape";
+  const isManageGroupActive = toolMode === "select" || toolMode === "move-sig";
+
+  // 8 ปุ่มรอบวงกลม แบ่งตาม 5 หมวดเครื่องมือหลัก + Undo/Redo + เลื่อนหน้า
   const orbitItems: {
     id: string;
     angleDeg: number;
@@ -338,46 +453,76 @@ export function FloatingRadialToolbar({
     onClick: () => void;
   }[] = [
     {
-      id: "pen",
+      id: "cat-draw",
       angleDeg: -90,
-      label: "ปากกา (เขียน/วาด)",
-      active: toolMode === "pen",
-      accentColor: penColor,
-      icon: <PenLine className="w-4 h-4" />,
+      label: "1. เขียน (ปากกา / เน้นข้อความ / ดินสอ)",
+      active: isDrawGroupActive || subPanel === "draw",
+      accentColor: toolMode === "highlighter" ? highlighterColor : penColor,
+      icon:
+        toolMode === "highlighter" ? (
+          <Highlighter className="w-4 h-4" />
+        ) : toolMode === "pencil" ? (
+          <Pencil className="w-4 h-4" />
+        ) : (
+          <PenLine className="w-4 h-4" />
+        ),
       onClick: () => {
-        onToolModeChange("pen");
-        setSubPanel(null);
+        if (!isDrawGroupActive) {
+          onToolModeChange("pen");
+        }
+        setSubPanel((cur) => (cur === "draw" ? null : "draw"));
       },
     },
     {
-      id: "highlighter",
+      id: "cat-erase",
       angleDeg: -45,
-      label: "ไฮไลต์ (เน้นข้อความ)",
-      active: toolMode === "highlighter",
-      accentColor: highlighterColor,
-      icon: <Highlighter className="w-4 h-4" />,
-      onClick: () => {
-        onToolModeChange("highlighter");
-        setSubPanel(null);
-      },
-    },
-    {
-      id: "eraser",
-      angleDeg: 0,
-      label: "ยางลบ (ลบลายเส้น)",
-      active: toolMode === "eraser",
+      label: "2. ลบ (ยางลบ / ลบวัตถุ / เลือกเพื่อลบ)",
+      active: isEraseGroupActive || subPanel === "erase",
       accentColor: "#f43f5e",
-      icon: <Eraser className="w-4 h-4" />,
+      icon:
+        toolMode === "lasso-delete" ? (
+          <BoxSelect className="w-4 h-4" />
+        ) : (
+          <Eraser className="w-4 h-4" />
+        ),
       onClick: () => {
-        onToolModeChange("eraser");
-        setSubPanel(null);
+        if (!isEraseGroupActive) {
+          onToolModeChange("eraser");
+        }
+        setSubPanel((cur) => (cur === "erase" ? null : "erase"));
       },
     },
     {
-      id: "color",
+      id: "cat-shapes",
+      angleDeg: 0,
+      label: "3. รูปทรง (สี่เหลี่ยม / วงกลม / เส้น / ลูกศร / สามเหลี่ยม / มุมมน)",
+      active: isShapeGroupActive || subPanel === "shapes",
+      accentColor: penColor,
+      icon: renderShapeIcon(activeShapeKind, "w-4 h-4"),
+      onClick: () => {
+        onToolModeChange("shape");
+        setSubPanel((cur) => (cur === "shapes" ? null : "shapes"));
+      },
+    },
+    {
+      id: "cat-manage",
       angleDeg: 45,
-      label: "เลือกสี",
-      active: subPanel === "color",
+      label: "4. จัดการ (เลือก / ย้าย / ปรับขนาด / หมุน / คัดลอก / ลำดับชั้น)",
+      active: isManageGroupActive || subPanel === "manage",
+      accentColor: "#3b82f6",
+      icon: <MousePointer2 className="w-4 h-4" />,
+      onClick: () => {
+        if (toolMode !== "select" && toolMode !== "move-sig") {
+          onToolModeChange("select");
+        }
+        setSubPanel((cur) => (cur === "manage" ? null : "manage"));
+      },
+    },
+    {
+      id: "cat-customize",
+      angleDeg: 90,
+      label: "5. ปรับแต่ง (สี / ความหนา / ความโปร่งใส / Undo-Redo)",
+      active: subPanel === "customize",
       icon: (
         <span className="relative inline-flex items-center justify-center">
           <Palette className="w-4 h-4" />
@@ -388,17 +533,7 @@ export function FloatingRadialToolbar({
         </span>
       ),
       onClick: () => {
-        setSubPanel((cur) => (cur === "color" ? null : "color"));
-      },
-    },
-    {
-      id: "size",
-      angleDeg: 90,
-      label: "ปรับความหนา / ล้างหน้า",
-      active: subPanel === "size",
-      icon: <SlidersHorizontal className="w-4 h-4" />,
-      onClick: () => {
-        setSubPanel((cur) => (cur === "size" ? null : "size"));
+        setSubPanel((cur) => (cur === "customize" ? null : "customize"));
       },
     },
     {
@@ -422,29 +557,96 @@ export function FloatingRadialToolbar({
       },
     },
     {
-      id: "sig-pan",
+      id: "pan-sig",
       angleDeg: -135,
-      label: toolMode === "move-sig" ? "สลับเป็นเลื่อนหน้า" : "ย้ายลายเซ็น / เลื่อนหน้า",
-      active: toolMode === "move-sig" || toolMode === "pan",
-      accentColor: toolMode === "pan" ? "#f59e0b" : "#6366f1",
+      label: toolMode === "pan" ? "สลับเป็นย้ายลายเซ็น" : "เลื่อนกระดาษ / ย้ายลายเซ็น",
+      active: toolMode === "pan",
+      accentColor: "#f59e0b",
       icon: toolMode === "pan" ? <Hand className="w-4 h-4" /> : <Move className="w-4 h-4" />,
       onClick: () => {
-        onToolModeChange(toolMode === "move-sig" ? "pan" : "move-sig");
+        onToolModeChange(toolMode === "pan" ? "move-sig" : "pan");
         setSubPanel(null);
       },
     },
   ];
 
-  // ทิศทางการเปิด popover (ซ้าย/ขวา และ บน/ล่าง) เพื่อไม่ให้ล้นพื้นที่ PDF
   const openPopoverLeft = activeCenterX > containerSize.width * 0.5;
-  const openPopoverAbove = activeCenterY > containerSize.height * 0.55;
+  const openPopoverAbove = activeCenterY > containerSize.height * 0.54;
+
+  const categoryTabs: { id: ToolbarCategoryTab; label: string }[] = [
+    { id: "draw", label: "1.เขียน" },
+    { id: "erase", label: "2.ลบ" },
+    { id: "shapes", label: "3.รูปทรง" },
+    { id: "manage", label: "4.จัดการ" },
+    { id: "customize", label: "5.ปรับแต่ง" },
+  ];
 
   return (
     <div
       className="pointer-events-none absolute inset-0 z-30 overflow-visible"
-      aria-label="แถบเครื่องมือปากกาลอยแบบวงกลม"
+      aria-label="แถบเครื่องมือปากกาและรูปทรงลอยแบบวงกลม"
     >
-      {/* โหมดยุบเมื่อไม่ได้ใช้งาน: ปุ่มวงกลมเล็ก ๆ ที่ขอบจอ (ลากย้ายตำแหน่งได้) */}
+      {/* แถบคำสั่งด่วนเมื่อมีรูปทรงถูกเลือกอยู่บนหน้ากระดาษ */}
+      {selectedShape && (
+        <div className="pointer-events-auto absolute top-2.5 left-1/2 -translate-x-1/2 z-40 flex flex-wrap items-center gap-1 px-2.5 py-1.5 rounded-2xl bg-slate-900/92 text-white border border-white/20 shadow-xl backdrop-blur-md text-[11px]">
+          <span className="font-bold text-sky-300 px-1">
+            {SHAPE_LABELS[selectedShape.kind]}
+          </span>
+          <button
+            type="button"
+            onClick={onDuplicateSelectedShape}
+            title="ทำสำเนารูปทรง (คัดลอก)"
+            className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 font-semibold inline-flex items-center gap-1"
+          >
+            <Copy className="w-3.5 h-3.5" />
+            <span>ทำสำเนา</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onRotateSelectedShape(-15)}
+            title="หมุนซ้าย 15°"
+            className="p-1 rounded-lg bg-white/10 hover:bg-white/20"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onRotateSelectedShape(15)}
+            title="หมุนขวา 15°"
+            className="p-1 rounded-lg bg-white/10 hover:bg-white/20"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onLayerSelectedShape("front")}
+            title="นำไปข้างหน้าสุด"
+            className="px-1.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 inline-flex items-center gap-0.5"
+          >
+            <ArrowUpToLine className="w-3.5 h-3.5" />
+            <span>หน้าสุด</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onLayerSelectedShape("back")}
+            title="ส่งไปข้างหลังสุด"
+            className="px-1.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 inline-flex items-center gap-0.5"
+          >
+            <ArrowDownToLine className="w-3.5 h-3.5" />
+            <span>หลังสุด</span>
+          </button>
+          <button
+            type="button"
+            onClick={onDeleteSelectedShape}
+            title="ลบรูปทรงนี้"
+            className="p-1 rounded-lg bg-rose-500/30 hover:bg-rose-500/50 text-rose-200"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* โหมดยุบเมื่อไม่ได้ใช้งาน: ปุ่มวงกลมเล็ก ๆ ที่ขอบจอ */}
       {!expanded && (
         <button
           type="button"
@@ -456,7 +658,7 @@ export function FloatingRadialToolbar({
             })
           }
           onPointerCancel={(e) => endDrag(e)}
-          title={`เครื่องมือปากกา (${activeToolLabel}) · แตะเพื่อกางวงกลม หรือลากย้ายตำแหน่ง`}
+          title={`เครื่องมือ (${activeToolLabel}) · แตะเพื่อกางวงกลม หรือลากย้ายตำแหน่ง`}
           style={{
             width: `${COLLAPSED_SIZE}px`,
             height: `${COLLAPSED_SIZE}px`,
@@ -472,11 +674,11 @@ export function FloatingRadialToolbar({
             className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-slate-800 shadow-xs"
             style={{ backgroundColor: activeColor }}
           />
-          <span className="sr-only">เปิดเครื่องมือปากกา Markup</span>
+          <span className="sr-only">เปิดเครื่องมือปากกาและรูปทรง</span>
         </button>
       )}
 
-      {/* โหมดขณะใช้งาน: Radial Tool Palette วงกลมลอยครบเครื่อง */}
+      {/* โหมดขณะใช้งาน: Radial Tool Palette */}
       {expanded && (
         <div
           onPointerEnter={(e) => {
@@ -502,9 +704,8 @@ export function FloatingRadialToolbar({
           }}
           className="pointer-events-auto absolute select-none touch-none"
         >
-          {/* วงกลมพื้นหลังสไตล์ iPad Dark Glass */}
-          <div className="relative w-full h-full rounded-full bg-slate-800/92 backdrop-blur-xl border border-white/20 shadow-[0_20px_50px_rgba(15,23,42,0.48)] ring-1 ring-slate-950/30">
-            {/* ปุ่มศูนย์กลาง: จับลากย้ายทั้งวงกลม หรือแตะเพื่อยุบกลับขอบจอ */}
+          <div className="relative w-full h-full rounded-full bg-slate-800/94 backdrop-blur-xl border border-white/20 shadow-[0_20px_50px_rgba(15,23,42,0.48)] ring-1 ring-slate-950/30">
+            {/* ปุ่มศูนย์กลาง: ลากย้ายวงกลม หรือแตะเพื่อยุบ */}
             <button
               type="button"
               onPointerDown={beginDrag}
@@ -517,7 +718,7 @@ export function FloatingRadialToolbar({
               }
               onPointerCancel={(e) => endDrag(e)}
               title="ลากเพื่อย้ายตำแหน่งวงกลม · แตะเพื่อยุบเป็นปุ่มเล็ก"
-              className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[50px] h-[50px] rounded-full bg-slate-700/95 hover:bg-slate-600 text-white border border-white/25 shadow-inner flex flex-col items-center justify-center gap-0.5 transition-transform ${
+              className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[52px] h-[52px] rounded-full bg-slate-700/95 hover:bg-slate-600 text-white border border-white/25 shadow-inner flex flex-col items-center justify-center gap-0.5 transition-transform ${
                 isDragging ? "cursor-grabbing scale-95 ring-4 ring-indigo-400/40" : "cursor-grab"
               }`}
             >
@@ -571,271 +772,602 @@ export function FloatingRadialToolbar({
               );
             })}
 
-            {/* ป้ายบอกสถานะโหมดที่ใช้งานอยู่ใต้ศูนย์กลาง (หรือยุบเมื่อลาก) */}
             <div className="pointer-events-none absolute -bottom-6 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full bg-slate-900/85 text-[10px] font-bold text-slate-100 whitespace-nowrap shadow-xs border border-white/15">
               {activeToolLabel} · แตะตรงกลางเพื่อยุบ
             </div>
           </div>
 
-          {/* Popover ย่อย: เลือกสีปากกาและสีไฮไลต์ */}
-          {subPanel === "color" && (
+          {/* แผงเครื่องมือย่อยแบ่งตาม 5 หมวด (เขียน / ลบ / รูปทรง / จัดการ / ปรับแต่ง) */}
+          {subPanel !== null && (
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
                 ...(openPopoverLeft ? { right: "calc(100% + 10px)" } : { left: "calc(100% + 10px)" }),
-                ...(openPopoverAbove ? { bottom: "4px" } : { top: "4px" }),
+                ...(openPopoverAbove ? { bottom: "0px" } : { top: "0px" }),
               }}
-              className="absolute w-56 rounded-2xl bg-slate-900/95 backdrop-blur-xl text-white border border-white/20 p-3 shadow-2xl space-y-2.5 z-40"
+              className="absolute w-72 rounded-2xl bg-slate-900/96 backdrop-blur-xl text-white border border-white/20 p-3 shadow-2xl space-y-2.5 z-40"
             >
-              <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
-                <span className="text-[11px] font-bold text-slate-200">เลือกสีหมึก & ไฮไลต์</span>
+              {/* แถบสลับ 5 หมวดเครื่องมือ */}
+              <div className="flex items-center justify-between gap-1 border-b border-white/10 pb-2">
+                <div className="grid grid-cols-5 gap-1 flex-1">
+                  {categoryTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setSubPanel(tab.id)}
+                      className={`py-1 px-1 rounded-lg text-[10px] font-bold transition-colors ${
+                        subPanel === tab.id
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "bg-white/5 text-slate-300 hover:bg-white/15"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
                 <button
                   type="button"
                   onClick={() => setSubPanel(null)}
-                  className="p-0.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 shrink-0"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
 
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-semibold text-slate-400">สีปากกา (เขียน/วาด)</div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {PEN_COLOR_PRESETS.map((c) => (
-                    <button
-                      key={c.color}
-                      type="button"
-                      title={`ปากกาสี${c.label}`}
-                      onClick={() => {
-                        onPenColorChange(c.color);
-                        onToolModeChange("pen");
-                      }}
-                      className={`w-6 h-6 rounded-full border-2 transition-transform ${
-                        toolMode === "pen" && penColor === c.color
-                          ? "border-white scale-115 ring-2 ring-indigo-400"
-                          : "border-white/30 hover:scale-105"
-                      }`}
-                      style={{ backgroundColor: c.color }}
-                    />
-                  ))}
-                  <label
-                    title="เลือกสีปากกาเอง"
-                    className="w-6 h-6 rounded-full border border-white/40 overflow-hidden cursor-pointer flex items-center justify-center bg-gradient-to-tr from-rose-500 via-amber-400 to-cyan-400"
-                  >
+              {/* หมวดที่ 1: เขียน (ปากกา, ปากกาเน้นข้อความ, ดินสอ) */}
+              {subPanel === "draw" && (
+                <div className="space-y-2.5">
+                  <div className="text-[11px] font-bold text-slate-200">
+                    หมวด 1 · เครื่องมือเขียน
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[
+                      {
+                        mode: "pen" as const,
+                        label: "ปากกา",
+                        desc: "เส้นคมชัดตามแรงกด",
+                        icon: <PenLine className="w-4 h-4" />,
+                      },
+                      {
+                        mode: "highlighter" as const,
+                        label: "เน้นข้อความ",
+                        desc: "ไฮไลต์โปร่งแสง",
+                        icon: <Highlighter className="w-4 h-4" />,
+                      },
+                      {
+                        mode: "pencil" as const,
+                        label: "ดินสอ",
+                        desc: "เส้นร่างนุ่มนวล",
+                        icon: <Pencil className="w-4 h-4" />,
+                      },
+                    ].map((item) => (
+                      <button
+                        key={item.mode}
+                        type="button"
+                        onClick={() => onToolModeChange(item.mode)}
+                        className={`p-2 rounded-xl border text-left flex flex-col items-center gap-1 transition-all ${
+                          toolMode === item.mode
+                            ? "border-indigo-400 bg-indigo-500/25 text-white shadow-xs"
+                            : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                        }`}
+                      >
+                        {item.icon}
+                        <span className="text-[11px] font-bold">{item.label}</span>
+                        <span className="text-[9px] text-slate-400 text-center leading-tight">
+                          {item.desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* เลือกสีด่วนในหมวดเขียน */}
+                  <div className="space-y-1 pt-1 border-t border-white/10">
+                    <div className="text-[10px] font-semibold text-slate-400">
+                      {toolMode === "highlighter" ? "สีปากกาเน้นข้อความ:" : "สีหมึกปากกา / ดินสอ:"}
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {(toolMode === "highlighter"
+                        ? HIGHLIGHTER_COLOR_PRESETS
+                        : PEN_COLOR_PRESETS
+                      ).map((c) => {
+                        const curColor =
+                          toolMode === "highlighter" ? highlighterColor : penColor;
+                        return (
+                          <button
+                            key={c.color}
+                            type="button"
+                            onClick={() => {
+                              if (toolMode === "highlighter") {
+                                onHighlighterColorChange(c.color);
+                              } else {
+                                onPenColorChange(c.color);
+                              }
+                            }}
+                            className={`w-6 h-6 rounded-full border-2 transition-transform ${
+                              curColor === c.color
+                                ? "border-white scale-115 ring-2 ring-indigo-400"
+                                : "border-white/30 hover:scale-105"
+                            }`}
+                            style={{ backgroundColor: c.color }}
+                            title={c.label}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-2 text-[10px] leading-snug text-slate-200 bg-white/5 p-2 rounded-xl border border-white/10 cursor-pointer">
                     <input
-                      type="color"
-                      value={penColor}
-                      onChange={(e) => {
-                        onPenColorChange(e.target.value);
-                        onToolModeChange("pen");
-                      }}
-                      className="opacity-0 w-full h-full cursor-pointer"
+                      type="checkbox"
+                      checked={ipadPencilOnly}
+                      onChange={(e) => onIpadPencilOnlyChange(e.target.checked)}
+                      className="accent-indigo-400 mt-0.5 shrink-0"
                     />
+                    <span>โหมดปากกา iPad (ใช้ Apple Pencil เขียน / ใช้นิ้วเลื่อนหน้า)</span>
                   </label>
-                </div>
-              </div>
-
-              <div className="space-y-1.5 pt-1 border-t border-white/10">
-                <div className="text-[10px] font-semibold text-slate-400">สีไฮไลต์ (เน้นข้อความโปร่งแสง)</div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {HIGHLIGHTER_COLOR_PRESETS.map((c) => (
-                    <button
-                      key={c.color}
-                      type="button"
-                      title={`ไฮไลต์สี${c.label}`}
-                      onClick={() => {
-                        onHighlighterColorChange(c.color);
-                        onToolModeChange("highlighter");
-                      }}
-                      className={`w-6 h-6 rounded-full border-2 transition-transform ${
-                        toolMode === "highlighter" && highlighterColor === c.color
-                          ? "border-white scale-115 ring-2 ring-amber-300"
-                          : "border-white/30 hover:scale-105"
-                      }`}
-                      style={{ backgroundColor: c.color }}
-                    />
-                  ))}
-                  <label
-                    title="เลือกสีไฮไลต์เอง"
-                    className="w-6 h-6 rounded-full border border-white/40 overflow-hidden cursor-pointer flex items-center justify-center bg-gradient-to-tr from-yellow-300 via-pink-400 to-emerald-400"
-                  >
-                    <input
-                      type="color"
-                      value={highlighterColor}
-                      onChange={(e) => {
-                        onHighlighterColorChange(e.target.value);
-                        onToolModeChange("highlighter");
-                      }}
-                      className="opacity-0 w-full h-full cursor-pointer"
-                    />
-                  </label>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Popover ย่อย: ปรับขนาดความหนา + ล้างลายเส้น + โหมด Apple Pencil */}
-          {subPanel === "size" && (
-            <div
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                ...(openPopoverLeft ? { right: "calc(100% + 10px)" } : { left: "calc(100% + 10px)" }),
-                ...(openPopoverAbove ? { bottom: "4px" } : { top: "4px" }),
-              }}
-              className="absolute w-60 rounded-2xl bg-slate-900/95 backdrop-blur-xl text-white border border-white/20 p-3 shadow-2xl space-y-2.5 z-40"
-            >
-              <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
-                <span className="text-[11px] font-bold text-slate-200">
-                  {toolMode === "highlighter"
-                    ? "ความหนาหัวไฮไลต์"
-                    : toolMode === "eraser"
-                    ? "ขนาดหัวลบ"
-                    : "ความหนาหัวปากกา"}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSubPanel(null)}
-                  className="p-0.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {toolMode === "highlighter" ? (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {[4, 6, 8.5, 11].map((w) => (
-                      <button
-                        key={w}
-                        type="button"
-                        onClick={() => onHighlighterWidthChange(w)}
-                        className={`h-8 rounded-lg border flex items-center justify-center ${
-                          Math.abs(highlighterWidthMm - w) < 0.4
-                            ? "border-amber-300 bg-white/15"
-                            : "border-white/15 bg-white/5 hover:bg-white/10"
-                        }`}
-                      >
-                        <span
-                          className="rounded-full inline-block"
-                          style={{
-                            width: `${Math.min(22, w * 1.9)}px`,
-                            height: `${Math.min(14, Math.max(5, w * 1.1))}px`,
-                            backgroundColor: highlighterColor,
-                            opacity: 0.75,
-                          }}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                  <input
-                    type="range"
-                    min={3}
-                    max={13}
-                    step={0.5}
-                    value={highlighterWidthMm}
-                    onChange={(e) => onHighlighterWidthChange(Number(e.target.value))}
-                    className="w-full accent-amber-400"
-                  />
-                </div>
-              ) : toolMode === "eraser" ? (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {[3.5, 5.5, 8.5, 12].map((r) => (
-                      <button
-                        key={r}
-                        type="button"
-                        onClick={() => onEraserRadiusChange(r)}
-                        className={`h-8 rounded-lg border flex items-center justify-center ${
-                          Math.abs(eraserRadiusMm - r) < 0.5
-                            ? "border-rose-400 bg-white/15"
-                            : "border-white/15 bg-white/5 hover:bg-white/10"
-                        }`}
-                      >
-                        <span
-                          className="rounded-full bg-rose-200 border border-rose-400 inline-block"
-                          style={{
-                            width: `${Math.min(20, r * 1.6)}px`,
-                            height: `${Math.min(20, r * 1.6)}px`,
-                          }}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                  <input
-                    type="range"
-                    min={3}
-                    max={15}
-                    step={0.5}
-                    value={eraserRadiusMm}
-                    onChange={(e) => onEraserRadiusChange(Number(e.target.value))}
-                    className="w-full accent-rose-400"
-                  />
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {[0.4, 0.65, 1.0, 1.45].map((w) => (
-                      <button
-                        key={w}
-                        type="button"
-                        onClick={() => {
-                          onPenWidthChange(w);
-                          if (toolMode !== "pen") onToolModeChange("pen");
-                        }}
-                        className={`h-8 rounded-lg border flex items-center justify-center ${
-                          Math.abs(penWidthMm - w) < 0.08
-                            ? "border-indigo-400 bg-white/15"
-                            : "border-white/15 bg-white/5 hover:bg-white/10"
-                        }`}
-                      >
-                        <span
-                          className="rounded-full inline-block"
-                          style={{
-                            width: `${Math.max(4, Math.min(18, w * 10))}px`,
-                            height: `${Math.max(4, Math.min(18, w * 10))}px`,
-                            backgroundColor: penColor,
-                          }}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                  <input
-                    type="range"
-                    min={0.3}
-                    max={1.8}
-                    step={0.05}
-                    value={penWidthMm}
-                    onChange={(e) => {
-                      onPenWidthChange(Number(e.target.value));
-                      if (toolMode !== "pen") onToolModeChange("pen");
-                    }}
-                    className="w-full accent-indigo-400"
-                  />
                 </div>
               )}
 
-              <label className="flex items-start gap-2 text-[10px] leading-snug text-slate-200 bg-white/5 p-2 rounded-xl border border-white/10 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={ipadPencilOnly}
-                  onChange={(e) => onIpadPencilOnlyChange(e.target.checked)}
-                  className="accent-indigo-400 mt-0.5 shrink-0"
-                />
-                <span>โหมด iPad Apple Pencil (ปากกาเขียน / นิ้วเลื่อนกระดาษ)</span>
-              </label>
+              {/* หมวดที่ 2: ลบ (ยางลบ, ลบวัตถุ, เลือกเพื่อลบ) */}
+              {subPanel === "erase" && (
+                <div className="space-y-2.5">
+                  <div className="text-[11px] font-bold text-slate-200">
+                    หมวด 2 · เครื่องมือลบ
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[
+                      {
+                        mode: "eraser" as const,
+                        label: "ยางลบ",
+                        desc: "ถูผ่านเพื่อลบเส้น",
+                        icon: <Eraser className="w-4 h-4" />,
+                      },
+                      {
+                        mode: "object-eraser" as const,
+                        label: "ลบวัตถุ",
+                        desc: "แตะลบเส้น/รูปทรง",
+                        icon: <Layers className="w-4 h-4" />,
+                      },
+                      {
+                        mode: "lasso-delete" as const,
+                        label: "เลือกเพื่อลบ",
+                        desc: "ลากกรอบคลุมลบ",
+                        icon: <BoxSelect className="w-4 h-4" />,
+                      },
+                    ].map((item) => (
+                      <button
+                        key={item.mode}
+                        type="button"
+                        onClick={() => onToolModeChange(item.mode)}
+                        className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${
+                          toolMode === item.mode
+                            ? "border-rose-400 bg-rose-500/25 text-white shadow-xs"
+                            : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                        }`}
+                      >
+                        {item.icon}
+                        <span className="text-[11px] font-bold">{item.label}</span>
+                        <span className="text-[9px] text-slate-400 text-center leading-tight">
+                          {item.desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
 
-              <button
-                type="button"
-                disabled={currentPageStrokeCount === 0}
-                onClick={() => {
-                  onClearPageStrokes();
-                  setSubPanel(null);
-                }}
-                className="w-full py-1.5 px-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 text-rose-200 border border-rose-400/30 text-[11px] font-bold flex items-center justify-center gap-1.5 disabled:opacity-40"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>ล้างลายเส้นหน้านี้ทั้งหมด ({currentPageStrokeCount})</span>
-              </button>
+                  {toolMode !== "lasso-delete" && (
+                    <div className="space-y-1 pt-1 border-t border-white/10">
+                      <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>ขนาดหัวลบ</span>
+                        <span>{eraserRadiusMm.toFixed(1)} มม.</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={3}
+                        max={15}
+                        step={0.5}
+                        value={eraserRadiusMm}
+                        onChange={(e) => onEraserRadiusChange(Number(e.target.value))}
+                        className="w-full accent-rose-400"
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={currentPageStrokeCount === 0}
+                    onClick={() => {
+                      onClearPageStrokes();
+                      setSubPanel(null);
+                    }}
+                    className="w-full py-1.5 px-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 text-rose-200 border border-rose-400/30 text-[11px] font-bold flex items-center justify-center gap-1.5 disabled:opacity-40"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>ล้างลายเส้นและรูปทรงหน้านี้ ({currentPageStrokeCount})</span>
+                  </button>
+                </div>
+              )}
+
+              {/* หมวดที่ 3: รูปทรง (สี่เหลี่ยม, วงกลม, เส้นตรง, สามเหลี่ยม, ลูกศร, สี่เหลี่ยมมุมมน) */}
+              {subPanel === "shapes" && (
+                <div className="space-y-2.5">
+                  <div className="text-[11px] font-bold text-slate-200">
+                    หมวด 3 · วาดรูปทรง (ลากบนหน้า PDF เพื่อสร้าง)
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(
+                      [
+                        { kind: "rect", label: "สี่เหลี่ยม" },
+                        { kind: "ellipse", label: "วงกลม" },
+                        { kind: "line", label: "เส้นตรง" },
+                        { kind: "triangle", label: "สามเหลี่ยม" },
+                        { kind: "arrow", label: "ลูกศร" },
+                        { kind: "rounded-rect", label: "สี่เหลี่ยมมุมมน" },
+                      ] as { kind: ShapeKind; label: string }[]
+                    ).map((s) => (
+                      <button
+                        key={s.kind}
+                        type="button"
+                        onClick={() => {
+                          onActiveShapeKindChange(s.kind);
+                          onToolModeChange("shape");
+                        }}
+                        className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${
+                          toolMode === "shape" && activeShapeKind === s.kind
+                            ? "border-amber-400 bg-amber-500/25 text-white shadow-xs"
+                            : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                        }`}
+                      >
+                        {renderShapeIcon(s.kind, "w-4 h-4")}
+                        <span className="text-[10px] font-bold text-center leading-tight">
+                          {s.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* สีเส้นและสีพื้นสำหรับรูปทรง */}
+                  <div className="space-y-1.5 pt-1 border-t border-white/10">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-slate-400">
+                        สีเส้นรูปทรง:
+                      </span>
+                      <div className="flex items-center gap-1">
+                        {PEN_COLOR_PRESETS.map((c) => (
+                          <button
+                            key={c.color}
+                            type="button"
+                            onClick={() => onPenColorChange(c.color)}
+                            className={`w-5 h-5 rounded-full border ${
+                              penColor === c.color
+                                ? "border-white scale-110 ring-2 ring-amber-400"
+                                : "border-white/30"
+                            }`}
+                            style={{ backgroundColor: c.color }}
+                            title={c.label}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <label className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={shapeFillEnabled}
+                          onChange={(e) => onShapeFillEnabledChange(e.target.checked)}
+                          className="accent-amber-400"
+                        />
+                        <span>เติมสีพื้นรูปทรง</span>
+                      </label>
+                      {shapeFillEnabled && (
+                        <div className="flex items-center gap-1">
+                          {SHAPE_FILL_PRESETS.map((c) => (
+                            <button
+                              key={c.color}
+                              type="button"
+                              onClick={() => onShapeFillColorChange(c.color)}
+                              className={`w-5 h-5 rounded-full border ${
+                                shapeFillColor === c.color
+                                  ? "border-white scale-110 ring-2 ring-amber-400"
+                                  : "border-white/30"
+                              }`}
+                              style={{ backgroundColor: c.color }}
+                              title={c.label}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* หมวดที่ 4: จัดการ (เลือก, ย้าย, ปรับขนาด, หมุน, คัดลอก, จัดลำดับชั้น) */}
+              {subPanel === "manage" && (
+                <div className="space-y-2.5">
+                  <div className="text-[11px] font-bold text-slate-200">
+                    หมวด 4 · จัดการวัตถุและรูปทรง
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onToolModeChange("select")}
+                      className={`p-2 rounded-xl border flex flex-col items-center gap-1 text-[10px] font-bold ${
+                        toolMode === "select"
+                          ? "border-sky-400 bg-sky-500/25 text-white"
+                          : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                      }`}
+                    >
+                      <MousePointer2 className="w-4 h-4" />
+                      <span>เลือก/ย้ายรูปทรง</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onToolModeChange("move-sig")}
+                      className={`p-2 rounded-xl border flex flex-col items-center gap-1 text-[10px] font-bold ${
+                        toolMode === "move-sig"
+                          ? "border-indigo-400 bg-indigo-500/25 text-white"
+                          : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                      }`}
+                    >
+                      <Move className="w-4 h-4" />
+                      <span>ย้ายลายเซ็น</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onToolModeChange("pan")}
+                      className={`p-2 rounded-xl border flex flex-col items-center gap-1 text-[10px] font-bold ${
+                        toolMode === "pan"
+                          ? "border-amber-400 bg-amber-500/25 text-white"
+                          : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                      }`}
+                    >
+                      <Hand className="w-4 h-4" />
+                      <span>เลื่อนหน้า</span>
+                    </button>
+                  </div>
+
+                  {selectedShape ? (
+                    <div className="space-y-2 pt-1.5 border-t border-white/10">
+                      <div className="flex items-center justify-between text-[10px] text-sky-300 font-bold">
+                        <span>กำลังเลือก: {SHAPE_LABELS[selectedShape.kind]}</span>
+                        <span>หมุน/ย่อขยายที่จุดรอบรูปได้</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={onDuplicateSelectedShape}
+                          className="py-1.5 px-2 rounded-xl bg-white/10 hover:bg-white/20 text-[11px] font-bold flex items-center justify-center gap-1"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>ทำสำเนา (คัดลอก)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onDeleteSelectedShape}
+                          className="py-1.5 px-2 rounded-xl bg-rose-500/25 hover:bg-rose-500/40 text-rose-200 text-[11px] font-bold flex items-center justify-center gap-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>ลบรูปทรงนี้</span>
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onRotateSelectedShape(-45)}
+                          className="py-1.5 px-2 rounded-xl bg-white/5 hover:bg-white/15 text-[10px] font-semibold flex items-center justify-center gap-1"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>หมุนซ้าย 45°</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRotateSelectedShape(45)}
+                          className="py-1.5 px-2 rounded-xl bg-white/5 hover:bg-white/15 text-[10px] font-semibold flex items-center justify-center gap-1"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                          <span>หมุนขวา 45°</span>
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onLayerSelectedShape("front")}
+                          className="py-1.5 px-2 rounded-xl bg-white/5 hover:bg-white/15 text-[10px] font-semibold flex items-center justify-center gap-1"
+                        >
+                          <ArrowUpToLine className="w-3.5 h-3.5" />
+                          <span>นำไปข้างหน้า</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onLayerSelectedShape("back")}
+                          className="py-1.5 px-2 rounded-xl bg-white/5 hover:bg-white/15 text-[10px] font-semibold flex items-center justify-center gap-1"
+                        >
+                          <ArrowDownToLine className="w-3.5 h-3.5" />
+                          <span>ส่งไปข้างหลัง</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-slate-400 bg-white/5 p-2 rounded-xl border border-white/10 leading-relaxed">
+                      💡 แตะที่รูปทรงบนหน้า PDF เพื่อเลือก จากนั้นลากย้าย ดึงจุดสีขาว 8 ทิศเพื่อปรับขนาด ดึงจุดสีเขียวด้านบนเพื่อหมุน หรือกดทำสำเนาและจัดลำดับชั้นได้ทันที
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* หมวดที่ 5: ปรับแต่ง (สี, ความหนา, ความโปร่งใส, Undo / Redo) */}
+              {subPanel === "customize" && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-200">
+                      หมวด 5 · สี ความหนา ความโปร่งใส
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={!canUndo}
+                        onClick={onUndo}
+                        title="ย้อนกลับ (Undo)"
+                        className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-35 text-[10px] font-bold inline-flex items-center gap-1"
+                      >
+                        <Undo2 className="w-3 h-3" />
+                        <span>Undo</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canRedo}
+                        onClick={onRedo}
+                        title="ทำซ้ำ (Redo)"
+                        className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-35 text-[10px] font-bold inline-flex items-center gap-1"
+                      >
+                        <Redo2 className="w-3 h-3" />
+                        <span>Redo</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* สีเส้น (ปากกา / ดินสอ / รูปทรง) */}
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-semibold text-slate-400">
+                      สีเส้น (ปากกา / ดินสอ / ขอบรูปทรง)
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {PEN_COLOR_PRESETS.map((c) => (
+                        <button
+                          key={c.color}
+                          type="button"
+                          onClick={() => onPenColorChange(c.color)}
+                          className={`w-6 h-6 rounded-full border-2 transition-transform ${
+                            penColor === c.color
+                              ? "border-white scale-110 ring-2 ring-indigo-400"
+                              : "border-white/30 hover:scale-105"
+                          }`}
+                          style={{ backgroundColor: c.color }}
+                          title={c.label}
+                        />
+                      ))}
+                      <label
+                        title="เลือกสีเส้นเอง"
+                        className="w-6 h-6 rounded-full border border-white/40 overflow-hidden cursor-pointer flex items-center justify-center bg-gradient-to-tr from-rose-500 via-amber-400 to-cyan-400"
+                      >
+                        <input
+                          type="color"
+                          value={penColor}
+                          onChange={(e) => onPenColorChange(e.target.value)}
+                          className="opacity-0 w-full h-full cursor-pointer"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* สีพื้นรูปทรง */}
+                  <div className="space-y-1 pt-1 border-t border-white/10">
+                    <div className="flex items-center justify-between">
+                      <label className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={shapeFillEnabled}
+                          onChange={(e) => onShapeFillEnabledChange(e.target.checked)}
+                          className="accent-indigo-400"
+                        />
+                        <span>สีพื้นรูปทรง (Fill)</span>
+                      </label>
+                      <span className="text-[9px] text-slate-400">
+                        {shapeFillEnabled ? "เปิดสีพื้น" : "โปร่งใส (ไม่มีสีพื้น)"}
+                      </span>
+                    </div>
+                    {shapeFillEnabled && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {SHAPE_FILL_PRESETS.map((c) => (
+                          <button
+                            key={c.color}
+                            type="button"
+                            onClick={() => onShapeFillColorChange(c.color)}
+                            className={`w-5 h-5 rounded-full border-2 ${
+                              shapeFillColor === c.color
+                                ? "border-white scale-110 ring-2 ring-amber-400"
+                                : "border-white/30"
+                            }`}
+                            style={{ backgroundColor: c.color }}
+                            title={c.label}
+                          />
+                        ))}
+                        <label
+                          title="เลือกสีพื้นเอง"
+                          className="w-5 h-5 rounded-full border border-white/40 overflow-hidden cursor-pointer flex items-center justify-center bg-gradient-to-tr from-yellow-300 via-pink-400 to-emerald-400"
+                        >
+                          <input
+                            type="color"
+                            value={shapeFillColor}
+                            onChange={(e) => onShapeFillColorChange(e.target.value)}
+                            className="opacity-0 w-full h-full cursor-pointer"
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ความหนาของเส้น */}
+                  <div className="space-y-1 pt-1 border-t border-white/10">
+                    <div className="flex justify-between text-[10px] text-slate-300">
+                      <span className="inline-flex items-center gap-1">
+                        <SlidersHorizontal className="w-3 h-3" />
+                        <span>ความหนาเส้น</span>
+                      </span>
+                      <span>
+                        {toolMode === "highlighter"
+                          ? `${highlighterWidthMm.toFixed(1)} มม.`
+                          : `${penWidthMm.toFixed(2)} มม.`}
+                      </span>
+                    </div>
+                    {toolMode === "highlighter" ? (
+                      <input
+                        type="range"
+                        min={3}
+                        max={13}
+                        step={0.5}
+                        value={highlighterWidthMm}
+                        onChange={(e) => onHighlighterWidthChange(Number(e.target.value))}
+                        className="w-full accent-amber-400"
+                      />
+                    ) : (
+                      <input
+                        type="range"
+                        min={0.3}
+                        max={2.4}
+                        step={0.05}
+                        value={penWidthMm}
+                        onChange={(e) => onPenWidthChange(Number(e.target.value))}
+                        className="w-full accent-indigo-400"
+                      />
+                    )}
+                  </div>
+
+                  {/* ความโปร่งใส (Opacity) */}
+                  <div className="space-y-1 pt-1 border-t border-white/10">
+                    <div className="flex justify-between text-[10px] text-slate-300">
+                      <span className="inline-flex items-center gap-1">
+                        <Droplet className="w-3 h-3" />
+                        <span>ความโปร่งใส (ความทึบแสง)</span>
+                      </span>
+                      <span>{Math.round(strokeOpacity * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.2}
+                      max={1}
+                      step={0.05}
+                      value={strokeOpacity}
+                      onChange={(e) => onStrokeOpacityChange(Number(e.target.value))}
+                      className="w-full accent-sky-400"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -15,15 +15,18 @@ import {
   LocateFixed,
   Maximize2,
   Minimize2,
+  MousePointer2,
   Move,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   PenLine,
   PenTool,
   Plus,
   Redo2,
   RotateCcw,
   ScrollText,
+  Square,
   Trash2,
   Undo2,
   X,
@@ -34,6 +37,16 @@ import {
   FloatingRadialToolbar,
   PdfWorkspaceToolMode,
 } from "@/components/floating-radial-toolbar";
+import {
+  doesBoxIntersectShape,
+  hitTestShape,
+  PdfShapeItem,
+  renderPdfShape,
+  ShapeHandleType,
+  ShapeKind,
+  shapeLocalToWorld,
+  worldToShapeLocal,
+} from "@/lib/pdf-shapes";
 import { supabase } from "@/lib/supabase/client";
 
 function extractDriveFileId(url?: string | null): string | null {
@@ -143,14 +156,28 @@ interface PenStroke {
   color: string;
   baseWidthMm: number; // ความหนาพื้นฐานในหน่วย mm
   points: StrokePoint[];
-  tool?: "pen" | "highlighter";
+  tool?: "pen" | "highlighter" | "pencil";
   opacity?: number;
 }
 
 interface StrokeHistoryEntry {
   page: number;
-  prev: PenStroke[];
-  next: PenStroke[];
+  prevStrokes: PenStroke[];
+  nextStrokes: PenStroke[];
+  prevShapes: PdfShapeItem[];
+  nextShapes: PdfShapeItem[];
+}
+
+function doesBoxIntersectStroke(
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+  stroke: PenStroke
+): boolean {
+  for (const pt of stroke.points) {
+    if (pt.xMm >= box.minX && pt.xMm <= box.maxX && pt.yMm >= box.minY && pt.yMm <= box.maxY) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isPointNearStroke(
@@ -230,13 +257,19 @@ function renderPressureStroke(
   ctx.lineJoin = "round";
 
   const basePx = Math.max(1.2, stroke.baseWidthMm * mmToPx);
+  const effectiveAlpha =
+    stroke.tool === "highlighter"
+      ? stroke.opacity ?? 0.34
+      : stroke.tool === "pencil"
+      ? stroke.opacity ?? 0.78
+      : stroke.opacity ?? 1;
 
-  if (stroke.tool === "highlighter") {
-    ctx.globalAlpha = stroke.opacity ?? 0.34;
-    ctx.lineWidth = Math.max(4, basePx);
+  if (stroke.tool === "highlighter" || effectiveAlpha < 0.99) {
+    ctx.globalAlpha = effectiveAlpha;
+    ctx.lineWidth = stroke.tool === "highlighter" ? Math.max(4, basePx) : Math.max(1.1, basePx);
     if (pts.length === 1) {
       ctx.beginPath();
-      ctx.arc(pts[0].xMm * mmToPx, pts[0].yMm * mmToPx, Math.max(2, basePx / 2), 0, Math.PI * 2);
+      ctx.arc(pts[0].xMm * mmToPx, pts[0].yMm * mmToPx, Math.max(1.2, basePx / 2), 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
       return;
@@ -511,17 +544,29 @@ export function DirectorStampCanvas({
   const [toolbarCollapseSignal, setToolbarCollapseSignal] = useState(0);
   const isToolbarExpandedRef = useRef(false);
 
-  // โหมดการใช้งานบนกระดาษ: "move-sig" = ย้ายลายเซ็น, "pen" = ปากกา, "highlighter" = ไฮไลต์, "eraser" = ยางลบ, "pan" = เลื่อนกระดาษ
+  // โหมดการใช้งานบนกระดาษครบ 5 หมวด (เขียน, ลบ, รูปทรง, จัดการ, ปรับแต่ง)
   const [toolMode, setToolMode] = useState<PdfWorkspaceToolMode>("move-sig");
   const toolModeRef = useRef<PdfWorkspaceToolMode>("move-sig");
+  const [activeShapeKind, setActiveShapeKind] = useState<ShapeKind>("rect");
   const [penColor, setPenColor] = useState("#dc2626");
   const [penBaseWidthMm, setPenBaseWidthMm] = useState(0.65);
   const [highlighterColor, setHighlighterColor] = useState("#facc15");
   const [highlighterWidthMm, setHighlighterWidthMm] = useState(6);
   const [eraserRadiusMm, setEraserRadiusMm] = useState(5.5);
+  const [strokeOpacity, setStrokeOpacity] = useState(1);
+  const [shapeFillColor, setShapeFillColor] = useState("#fef08a");
+  const [shapeFillEnabled, setShapeFillEnabled] = useState(false);
 
   const [strokesByPage, setStrokesByPage] = useState<Record<number, PenStroke[]>>({});
   const strokesByPageRef = useRef<Record<number, PenStroke[]>>({});
+  const [shapesByPage, setShapesByPage] = useState<Record<number, PdfShapeItem[]>>({});
+  const shapesByPageRef = useRef<Record<number, PdfShapeItem[]>>({});
+  const [selectedShapeLoc, setSelectedShapeLoc] = useState<{
+    page: number;
+    id: string;
+  } | null>(null);
+  const selectedShapeLocRef = useRef<{ page: number; id: string } | null>(null);
+
   const [strokeHistory, setStrokeHistory] = useState<{
     past: StrokeHistoryEntry[];
     future: StrokeHistoryEntry[];
@@ -542,10 +587,41 @@ export function DirectorStampCanvas({
   const drawRafRef = useRef<number | null>(null);
   const lastStylusTimeRef = useRef<number>(0);
 
+  const creatingShapeRef = useRef<{
+    pointerId: number;
+    page: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    shape: PdfShapeItem;
+  } | null>(null);
+
+  const transformShapeRef = useRef<{
+    pointerId: number;
+    page: number;
+    shapeId: string;
+    handle: ShapeHandleType;
+    startX: number;
+    startY: number;
+    initialShape: PdfShapeItem;
+    initialShapesList: PdfShapeItem[];
+    changed: boolean;
+  } | null>(null);
+
+  const lassoBoxRef = useRef<{
+    pointerId: number;
+    page: number;
+    startX: number;
+    startY: number;
+    curX: number;
+    curY: number;
+  } | null>(null);
+
   const eraseSessionRef = useRef<{
     pointerId: number;
     page: number;
     initialStrokes: PenStroke[];
+    initialShapes: PdfShapeItem[];
     changed: boolean;
   } | null>(null);
   const panStartRef = useRef<{
@@ -610,6 +686,14 @@ export function DirectorStampCanvas({
   }, [strokesByPage]);
 
   useEffect(() => {
+    shapesByPageRef.current = shapesByPage;
+  }, [shapesByPage]);
+
+  useEffect(() => {
+    selectedShapeLocRef.current = selectedShapeLoc;
+  }, [selectedShapeLoc]);
+
+  useEffect(() => {
     try {
       const savedSig = localStorage.getItem(STORAGE_SIG_KEY);
       if (savedSig) setSigDataUrl(savedSig);
@@ -632,7 +716,7 @@ export function DirectorStampCanvas({
       const k = MM_TO_PX;
       const cur = layoutRef.current;
 
-      // 1. วาดไฮไลต์โปร่งแสงไว้ด้านล่าง แล้วทับด้วยเส้นปากกาคมชัดตามน้ำหนักกด
+      // 1. วาดไฮไลต์โปร่งแสงไว้ด้านล่าง แล้วตามด้วยรูปทรง และเส้นปากกา/ดินสอ
       const pageStrokes = strokesByPageRef.current[targetPage] || [];
       const allStrokes =
         targetPage === activeStrokePageRef.current && activeStrokeRef.current
@@ -644,10 +728,47 @@ export function DirectorStampCanvas({
           renderPressureStroke(ctx, stroke, k);
         }
       }
+
+      // 1.5 วาดรูปทรง (สี่เหลี่ยม, วงกลม, เส้นตรง, สามเหลี่ยม, ลูกศร, สี่เหลี่ยมมุมมน)
+      const pageShapes = shapesByPageRef.current[targetPage] || [];
+      const allShapes =
+        creatingShapeRef.current && creatingShapeRef.current.page === targetPage
+          ? [...pageShapes, creatingShapeRef.current.shape]
+          : pageShapes;
+      const selLoc = selectedShapeLocRef.current;
+
+      for (const shape of allShapes) {
+        const isSel = Boolean(
+          showGuides && selLoc && selLoc.page === targetPage && selLoc.id === shape.id
+        );
+        renderPdfShape(ctx, shape, k, isSel, showGuides);
+      }
+
       for (const stroke of allStrokes) {
         if (stroke.tool !== "highlighter") {
           renderPressureStroke(ctx, stroke, k);
         }
+      }
+
+      // วาดกรอบเลือกเพื่อลบ (Lasso / Box Delete) หากกำลังลากคลุมพื้นที่
+      if (
+        showGuides &&
+        lassoBoxRef.current &&
+        lassoBoxRef.current.page === targetPage
+      ) {
+        const b = lassoBoxRef.current;
+        const bx = Math.min(b.startX, b.curX) * k;
+        const by = Math.min(b.startY, b.curY) * k;
+        const bw = Math.abs(b.curX - b.startX) * k;
+        const bh = Math.abs(b.curY - b.startY) * k;
+        ctx.save();
+        ctx.fillStyle = "rgba(244, 63, 94, 0.14)";
+        ctx.strokeStyle = "rgba(225, 29, 72, 0.9)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeRect(bx, by, bw, bh);
+        ctx.restore();
       }
 
       // 2. วาดลายเซ็น ผอ. ทุกจุดที่กำหนดไว้ในหน้านี้ (รองรับหลายจุด / หลายหน้า)
@@ -818,10 +939,17 @@ export function DirectorStampCanvas({
       pageSlotRefs.current = {};
       strokesByPageRef.current = {};
       setStrokesByPage({});
+      shapesByPageRef.current = {};
+      setShapesByPage({});
+      selectedShapeLocRef.current = null;
+      setSelectedShapeLoc(null);
       strokeHistoryRef.current = { past: [], future: [] };
       setStrokeHistory({ past: [], future: [] });
       activeStrokeRef.current = null;
       activeStrokePointerIdRef.current = null;
+      creatingShapeRef.current = null;
+      transformShapeRef.current = null;
+      lassoBoxRef.current = null;
       eraseSessionRef.current = null;
       panStartRef.current = null;
       dragSigRef.current = null;
@@ -1123,6 +1251,12 @@ export function DirectorStampCanvas({
         }
       }
 
+      for (const [pStr, list] of Object.entries(shapesByPageRef.current)) {
+        if (list && list.length > 0) {
+          pagesToExport.add(Number(pStr));
+        }
+      }
+
       if (cur.showSignatureOnDoc && (sigImageRef.current || cur.showSignerCaption)) {
         for (const sig of sigPlacementsRef.current) {
           pagesToExport.add(sig.pageNumber);
@@ -1274,15 +1408,47 @@ export function DirectorStampCanvas({
     });
   };
 
-  const eraseStrokesAtPoint = (xMm: number, yMm: number, targetPage: number) => {
-    const curList = strokesByPageRef.current[targetPage] || [];
-    if (curList.length === 0) return;
-    const remaining = curList.filter(
+  const eraseStrokesAtPoint = (
+    xMm: number,
+    yMm: number,
+    targetPage: number,
+    includeShapes: boolean
+  ) => {
+    const curStrokes = strokesByPageRef.current[targetPage] || [];
+    const remainingStrokes = curStrokes.filter(
       (stroke) => !isPointNearStroke(xMm, yMm, stroke, eraserRadiusMm)
     );
-    if (remaining.length !== curList.length) {
-      const nextMap = { ...strokesByPageRef.current, [targetPage]: remaining };
-      strokesByPageRef.current = nextMap;
+    let anyChanged = false;
+    if (remainingStrokes.length !== curStrokes.length) {
+      strokesByPageRef.current = {
+        ...strokesByPageRef.current,
+        [targetPage]: remainingStrokes,
+      };
+      anyChanged = true;
+    }
+
+    if (includeShapes) {
+      const curShapes = shapesByPageRef.current[targetPage] || [];
+      const remainingShapes = curShapes.filter(
+        (shape) => hitTestShape(xMm, yMm, shape, false) === null
+      );
+      if (remainingShapes.length !== curShapes.length) {
+        shapesByPageRef.current = {
+          ...shapesByPageRef.current,
+          [targetPage]: remainingShapes,
+        };
+        if (
+          selectedShapeLocRef.current?.page === targetPage &&
+          !remainingShapes.some((s) => s.id === selectedShapeLocRef.current?.id)
+        ) {
+          selectedShapeLocRef.current = null;
+          setSelectedShapeLoc(null);
+        }
+        anyChanged = true;
+      }
+    }
+
+    if (anyChanged) {
       if (eraseSessionRef.current) {
         eraseSessionRef.current.changed = true;
       }
@@ -1298,6 +1464,67 @@ export function DirectorStampCanvas({
     }
   };
 
+  const tryBeginShapeTransform = (
+    e: React.PointerEvent<HTMLCanvasElement>,
+    targetPage: number,
+    xMm: number,
+    yMm: number
+  ): boolean => {
+    const pageShapes = shapesByPageRef.current[targetPage] || [];
+    if (pageShapes.length === 0) return false;
+    const selLoc = selectedShapeLocRef.current;
+
+    // 1. ตรวจสอบรูปทรงที่กำลังถูกเลือกอยู่ก่อน (เพื่อให้จับจุดปรับขนาด/หมุนได้แม่นยำแม้ทับซ้อนกัน)
+    if (selLoc && selLoc.page === targetPage) {
+      const selShape = pageShapes.find((s) => s.id === selLoc.id);
+      if (selShape) {
+        const hit = hitTestShape(xMm, yMm, selShape, true);
+        if (hit) {
+          e.preventDefault();
+          safeSetPointerCapture(e.currentTarget, e.pointerId);
+          transformShapeRef.current = {
+            pointerId: e.pointerId,
+            page: targetPage,
+            shapeId: selShape.id,
+            handle: hit,
+            startX: xMm,
+            startY: yMm,
+            initialShape: { ...selShape },
+            initialShapesList: pageShapes.map((s) => ({ ...s })),
+            changed: false,
+          };
+          return true;
+        }
+      }
+    }
+
+    // 2. ตรวจสอบรูปทรงจากบนสุดลงล่างสุด
+    for (let i = pageShapes.length - 1; i >= 0; i--) {
+      const shape = pageShapes[i];
+      const hit = hitTestShape(xMm, yMm, shape, false);
+      if (hit) {
+        e.preventDefault();
+        selectedShapeLocRef.current = { page: targetPage, id: shape.id };
+        setSelectedShapeLoc({ page: targetPage, id: shape.id });
+        safeSetPointerCapture(e.currentTarget, e.pointerId);
+        transformShapeRef.current = {
+          pointerId: e.pointerId,
+          page: targetPage,
+          shapeId: shape.id,
+          handle: "move",
+          startX: xMm,
+          startY: yMm,
+          initialShape: { ...shape },
+          initialShapesList: pageShapes.map((s) => ({ ...s })),
+          changed: false,
+        };
+        redrawPageCanvas(targetPage);
+        return true;
+      }
+    }
+    return false;
+  };
+
   const handlePointerDown = (
     e: React.PointerEvent<HTMLCanvasElement>,
     targetPage: number
@@ -1307,11 +1534,16 @@ export function DirectorStampCanvas({
     const isFingerTouch = e.pointerType === "touch";
     const currentTool = toolModeRef.current;
     const isDrawOrEraseTool =
-      currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser";
+      currentTool === "pen" ||
+      currentTool === "highlighter" ||
+      currentTool === "pencil" ||
+      currentTool === "eraser" ||
+      currentTool === "object-eraser" ||
+      currentTool === "lasso-delete" ||
+      currentTool === "shape";
 
     if (isStylus) {
       lastStylusTimeRef.current = now;
-      // หากฝ่ามือแตะหน้าจอก่อนหน้าปากกาเสี้ยววินาที ให้ยกเลิกการเลื่อนหน้าของฝ่ามือแล้วคืนตำแหน่งเดิมทันที
       if (panStartRef.current && panStartRef.current.pointerType === "touch") {
         if (now - panStartRef.current.startedAt < 450 && scrollContainerRef.current) {
           scrollContainerRef.current.scrollLeft = panStartRef.current.scrollLeft;
@@ -1320,16 +1552,17 @@ export function DirectorStampCanvas({
         panStartRef.current = null;
       }
     } else if (isFingerTouch) {
-      // หากกำลังเขียน ลบ หรือลากลายเซ็นอยู่ ให้เพิกเฉยต่อการแตะของฝ่ามือหรือนิ้วอื่นทั้งหมด
       if (
         activeStrokeRef.current ||
+        creatingShapeRef.current ||
+        transformShapeRef.current ||
+        lassoBoxRef.current ||
         eraseSessionRef.current ||
         dragSigRef.current
       ) {
         return;
       }
 
-      // ป้องกันฝ่ามือ (Palm Rejection) เลื่อนกระดาษเองระหว่างยกหัวปากกาเขียนตัวอักษรไทยตัวถัดไป
       const isWidePalmContact = (e.width && e.width > 34) || (e.height && e.height > 34);
       const recentlyUsedStylus = now - lastStylusTimeRef.current < 950;
       if (currentTool !== "pan" && isDrawOrEraseTool && (recentlyUsedStylus || isWidePalmContact)) {
@@ -1357,8 +1590,46 @@ export function DirectorStampCanvas({
     cachePageCanvasRect(targetPage);
     const [x, y] = clientCoordsToMm(e.clientX, e.clientY, targetPage);
 
-    // โหมดยางลบ (ลบทั้งลายเส้นเมื่อแตะหรือลากผ่าน)
-    if (currentTool === "eraser") {
+    // หากมีรูปทรงที่กำลังถูกเลือกอยู่และแตะโดนจุดจับปรับขนาด/หมุนของรูปทรงนั้น ให้ปรับรูปทรงได้ทันที
+    if (
+      currentTool === "select" ||
+      (currentTool === "shape" &&
+        selectedShapeLocRef.current?.page === targetPage)
+    ) {
+      if (tryBeginShapeTransform(e, targetPage, x, y)) {
+        if (isToolbarExpandedRef.current) {
+          setToolbarCollapseSignal((n) => n + 1);
+        }
+        return;
+      }
+      if (currentTool === "select" && selectedShapeLocRef.current) {
+        selectedShapeLocRef.current = null;
+        setSelectedShapeLoc(null);
+        redrawPageCanvas(targetPage);
+      }
+    }
+
+    // โหมดเลือกพื้นที่เพื่อลบ (Lasso / Box Delete)
+    if (currentTool === "lasso-delete") {
+      e.preventDefault();
+      if (isToolbarExpandedRef.current) {
+        setToolbarCollapseSignal((n) => n + 1);
+      }
+      safeSetPointerCapture(e.currentTarget, e.pointerId);
+      lassoBoxRef.current = {
+        pointerId: e.pointerId,
+        page: targetPage,
+        startX: x,
+        startY: y,
+        curX: x,
+        curY: y,
+      };
+      scheduleSinglePageRedraw(targetPage);
+      return;
+    }
+
+    // โหมดยางลบ / ลบวัตถุ
+    if (currentTool === "eraser" || currentTool === "object-eraser") {
       e.preventDefault();
       if (isToolbarExpandedRef.current) {
         setToolbarCollapseSignal((n) => n + 1);
@@ -1368,21 +1639,70 @@ export function DirectorStampCanvas({
         pointerId: e.pointerId,
         page: targetPage,
         initialStrokes: [...(strokesByPageRef.current[targetPage] || [])],
+        initialShapes: [...(shapesByPageRef.current[targetPage] || [])],
         changed: false,
       };
-      eraseStrokesAtPoint(x, y, targetPage);
+      eraseStrokesAtPoint(x, y, targetPage, currentTool === "object-eraser");
       return;
     }
 
-    // โหมดปากกา / ไฮไลต์ (หรือแตะด้วย Apple Pencil แล้วเปลี่ยนเป็นเขียนอัตโนมัติ)
-    if (currentTool === "pen" || currentTool === "highlighter" || isStylus) {
+    // โหมดวาดรูปทรง (สี่เหลี่ยม, วงกลม, เส้นตรง, สามเหลี่ยม, ลูกศร, สี่เหลี่ยมมุมมน)
+    if (currentTool === "shape") {
       e.preventDefault();
       if (isToolbarExpandedRef.current) {
         setToolbarCollapseSignal((n) => n + 1);
       }
-      const activeTool: "pen" | "highlighter" =
-        currentTool === "highlighter" ? "highlighter" : "pen";
-      if (isStylus && currentTool !== "pen" && currentTool !== "highlighter") {
+      const newShape: PdfShapeItem = {
+        id: `shape_${targetPage}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        kind: activeShapeKind,
+        xMm: x,
+        yMm: y,
+        wMm: 1,
+        hMm: 1,
+        rotationRad: 0,
+        strokeColor: penColor,
+        fillColor: shapeFillColor,
+        fillEnabled: shapeFillEnabled,
+        strokeWidthMm: Math.max(0.45, penBaseWidthMm),
+        opacity: strokeOpacity,
+        flipX: false,
+        flipY: false,
+      };
+      creatingShapeRef.current = {
+        pointerId: e.pointerId,
+        page: targetPage,
+        startX: x,
+        startY: y,
+        moved: false,
+        shape: newShape,
+      };
+      safeSetPointerCapture(e.currentTarget, e.pointerId);
+      return;
+    }
+
+    // โหมดปากกา / เน้นข้อความ / ดินสอ (หรือแตะด้วย Apple Pencil ในโหมดลายเซ็น/เลื่อนหน้า)
+    if (
+      currentTool === "pen" ||
+      currentTool === "highlighter" ||
+      currentTool === "pencil" ||
+      (isStylus && currentTool !== "select")
+    ) {
+      e.preventDefault();
+      if (isToolbarExpandedRef.current) {
+        setToolbarCollapseSignal((n) => n + 1);
+      }
+      const activeTool: "pen" | "highlighter" | "pencil" =
+        currentTool === "highlighter"
+          ? "highlighter"
+          : currentTool === "pencil"
+          ? "pencil"
+          : "pen";
+      if (
+        isStylus &&
+        currentTool !== "pen" &&
+        currentTool !== "highlighter" &&
+        currentTool !== "pencil"
+      ) {
         toolModeRef.current = "pen";
         setToolMode("pen");
       }
@@ -1391,12 +1711,24 @@ export function DirectorStampCanvas({
         activeTool === "highlighter"
           ? 1
           : computePointPressure(e.pointerType, e.pressure, undefined, x, y, now);
+      const effectiveOpacity =
+        activeTool === "highlighter"
+          ? Math.min(0.45, strokeOpacity * 0.36)
+          : activeTool === "pencil"
+          ? Math.min(0.85, strokeOpacity * 0.78)
+          : strokeOpacity;
+
       const newStroke: PenStroke = {
         color: activeTool === "highlighter" ? highlighterColor : penColor,
-        baseWidthMm: activeTool === "highlighter" ? highlighterWidthMm : penBaseWidthMm,
+        baseWidthMm:
+          activeTool === "highlighter"
+            ? highlighterWidthMm
+            : activeTool === "pencil"
+            ? Math.max(0.35, penBaseWidthMm * 0.85)
+            : penBaseWidthMm,
         points: [{ xMm: x, yMm: y, p, t: now }],
         tool: activeTool,
-        opacity: activeTool === "highlighter" ? 0.34 : undefined,
+        opacity: effectiveOpacity,
       };
 
       activeStrokePageRef.current = targetPage;
@@ -1407,7 +1739,7 @@ export function DirectorStampCanvas({
       const cv = canvasRefs.current[targetPage];
       const ctx = cv?.getContext("2d");
       if (cv && ctx) {
-        if (activeTool === "highlighter") {
+        if (activeTool === "highlighter" || effectiveOpacity < 0.99) {
           let backdrop = highlighterBackdropRef.current;
           if (!backdrop) {
             backdrop = document.createElement("canvas");
@@ -1421,6 +1753,11 @@ export function DirectorStampCanvas({
         }
         renderPenStrokeDot(ctx, newStroke, MM_TO_PX);
       }
+      return;
+    }
+
+    // โหมดเลือก: ตรวจสอบว่าแตะโดนรูปทรงหรือไม่
+    if (tryBeginShapeTransform(e, targetPage, x, y)) {
       return;
     }
 
@@ -1454,7 +1791,7 @@ export function DirectorStampCanvas({
       }
     }
 
-    // นอกกรอบลายเซ็น: ให้ลาก/แตะเลื่อนกระดาษได้โดยไม่เผลอย้ายลายเซ็นข้ามหน้าโดยไม่ตั้งใจ
+    // นอกกรอบลายเซ็น/รูปทรง: ให้ลากเลื่อนกระดาษได้
     const container = scrollContainerRef.current;
     if (!container) return;
     panStartRef.current = {
@@ -1474,7 +1811,7 @@ export function DirectorStampCanvas({
       lastStylusTimeRef.current = performance.now();
     }
 
-    // 1. วาดเส้นปากกา / ไฮไลต์ (ตรวจสอบ pointerId เพื่อกันฝ่ามือแทรกกลางคัน)
+    // 1. วาดเส้นปากกา / ไฮไลต์ / ดินสอ
     if (activeStrokeRef.current) {
       if (e.pointerId !== activeStrokePointerIdRef.current) return;
       const targetPage = activeStrokePageRef.current;
@@ -1512,7 +1849,8 @@ export function DirectorStampCanvas({
       const ctx = cv?.getContext("2d");
       if (!cv || !ctx) return;
 
-      if (stroke.tool === "highlighter") {
+      const effectiveOpacity = stroke.opacity ?? 1;
+      if (stroke.tool === "highlighter" || effectiveOpacity < 0.99) {
         if (drawRafRef.current === null) {
           drawRafRef.current = requestAnimationFrame(() => {
             drawRafRef.current = null;
@@ -1528,23 +1866,104 @@ export function DirectorStampCanvas({
           });
         }
       } else {
-        // O(1) วาดเฉพาะเส้นส่วนที่เพิ่งเพิ่มเข้ามาโดยตรง ไม่ต้องล้างหน้า PDF ทั้งแผ่น
         renderIncrementalPenSegments(ctx, stroke, prevLen, MM_TO_PX);
       }
       return;
     }
 
-    // 2. โหมดยางลบ
+    // 1.2 โหมดลากสร้างรูปทรงใหม่
+    if (creatingShapeRef.current) {
+      if (e.pointerId !== creatingShapeRef.current.pointerId) return;
+      const sess = creatingShapeRef.current;
+      const [cx, cy] = clientCoordsToMm(e.clientX, e.clientY, sess.page);
+      const dx = cx - sess.startX;
+      const dy = cy - sess.startY;
+      if (!sess.moved && Math.hypot(dx, dy) > 1.5) {
+        sess.moved = true;
+      }
+      sess.shape = {
+        ...sess.shape,
+        xMm: (sess.startX + cx) / 2,
+        yMm: (sess.startY + cy) / 2,
+        wMm: Math.max(2, Math.abs(dx)),
+        hMm: Math.max(2, Math.abs(dy)),
+        flipX: cx < sess.startX,
+        flipY: cy < sess.startY,
+      };
+      scheduleSinglePageRedraw(sess.page);
+      return;
+    }
+
+    // 1.4 โหมดย้าย / ปรับขนาด 8 ทิศ / หมุนรูปทรง
+    if (transformShapeRef.current) {
+      if (e.pointerId !== transformShapeRef.current.pointerId) return;
+      const tr = transformShapeRef.current;
+      const [cx, cy] = clientCoordsToMm(e.clientX, e.clientY, tr.page);
+      const init = tr.initialShape;
+      let updated: PdfShapeItem = { ...init };
+
+      if (tr.handle === "move") {
+        const dx = cx - tr.startX;
+        const dy = cy - tr.startY;
+        updated.xMm = Math.max(2, Math.min(208, init.xMm + dx));
+        updated.yMm = Math.max(2, Math.min(295, init.yMm + dy));
+      } else if (tr.handle === "rotate") {
+        const angle = Math.atan2(cy - init.yMm, cx - init.xMm) + Math.PI / 2;
+        updated.rotationRad = angle;
+      } else {
+        const [lx, ly] = worldToShapeLocal(cx, cy, init);
+        let left = -init.wMm / 2;
+        let right = init.wMm / 2;
+        let top = -init.hMm / 2;
+        let bottom = init.hMm / 2;
+
+        if (tr.handle.includes("w")) left = Math.min(right - 3, lx);
+        if (tr.handle.includes("e")) right = Math.max(left + 3, lx);
+        if (tr.handle.includes("n")) top = Math.min(bottom - 3, ly);
+        if (tr.handle.includes("s")) bottom = Math.max(top + 3, ly);
+
+        const midLx = (left + right) / 2;
+        const midLy = (top + bottom) / 2;
+        const [newWorldX, newWorldY] = shapeLocalToWorld(midLx, midLy, init);
+        updated.xMm = newWorldX;
+        updated.yMm = newWorldY;
+        updated.wMm = Math.max(3, right - left);
+        updated.hMm = Math.max(3, bottom - top);
+      }
+
+      tr.changed = true;
+      const curList = shapesByPageRef.current[tr.page] || [];
+      shapesByPageRef.current = {
+        ...shapesByPageRef.current,
+        [tr.page]: curList.map((s) => (s.id === tr.shapeId ? updated : s)),
+      };
+      scheduleSinglePageRedraw(tr.page);
+      return;
+    }
+
+    // 1.6 โหมดลากกรอบเลือกเพื่อลบ (Lasso Delete)
+    if (lassoBoxRef.current) {
+      if (e.pointerId !== lassoBoxRef.current.pointerId) return;
+      const lb = lassoBoxRef.current;
+      const [cx, cy] = clientCoordsToMm(e.clientX, e.clientY, lb.page);
+      lb.curX = cx;
+      lb.curY = cy;
+      scheduleSinglePageRedraw(lb.page);
+      return;
+    }
+
+    // 2. โหมดยางลบ / ลบวัตถุ
     if (eraseSessionRef.current) {
       if (e.pointerId !== eraseSessionRef.current.pointerId) return;
       const targetPage = eraseSessionRef.current.page;
+      const isObjEraser = toolModeRef.current === "object-eraser";
       const coalesced: PointerEvent[] =
         typeof (e.nativeEvent as any).getCoalescedEvents === "function"
           ? (e.nativeEvent as any).getCoalescedEvents()
           : [e.nativeEvent];
       for (const ev of coalesced) {
         const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY, targetPage);
-        eraseStrokesAtPoint(cx, cy, targetPage);
+        eraseStrokesAtPoint(cx, cy, targetPage, isObjEraser);
       }
       return;
     }
@@ -1593,12 +2012,19 @@ export function DirectorStampCanvas({
       activeStrokePointerIdRef.current = null;
       activeCanvasRectRef.current = null;
 
-      const prevList = strokesByPageRef.current[targetPage] || [];
-      const nextList = [...prevList, finished];
-      const nextMap = { ...strokesByPageRef.current, [targetPage]: nextList };
+      const prevStrokes = strokesByPageRef.current[targetPage] || [];
+      const nextStrokes = [...prevStrokes, finished];
+      const curShapes = shapesByPageRef.current[targetPage] || [];
+      const nextMap = { ...strokesByPageRef.current, [targetPage]: nextStrokes };
       strokesByPageRef.current = nextMap;
       setStrokesByPage(nextMap);
-      commitHistoryEntry({ page: targetPage, prev: prevList, next: nextList });
+      commitHistoryEntry({
+        page: targetPage,
+        prevStrokes,
+        nextStrokes,
+        prevShapes: curShapes,
+        nextShapes: curShapes,
+      });
       redrawPageCanvas(targetPage);
 
       if (targetPage !== pageNumberRef.current) {
@@ -1611,17 +2037,131 @@ export function DirectorStampCanvas({
       return;
     }
 
+    // จบการวาดรูปทรงใหม่
+    if (creatingShapeRef.current && e.pointerId === creatingShapeRef.current.pointerId) {
+      const sess = creatingShapeRef.current;
+      creatingShapeRef.current = null;
+      activeCanvasRectRef.current = null;
+
+      const finalShape: PdfShapeItem = sess.moved
+        ? sess.shape
+        : {
+            ...sess.shape,
+            wMm: sess.shape.kind === "line" || sess.shape.kind === "arrow" ? 32 : 28,
+            hMm: sess.shape.kind === "line" || sess.shape.kind === "arrow" ? 8 : 18,
+          };
+
+      const prevShapes = shapesByPageRef.current[sess.page] || [];
+      const nextShapes = [...prevShapes, finalShape];
+      const curStrokes = strokesByPageRef.current[sess.page] || [];
+      const nextMap = { ...shapesByPageRef.current, [sess.page]: nextShapes };
+      shapesByPageRef.current = nextMap;
+      setShapesByPage(nextMap);
+
+      selectedShapeLocRef.current = { page: sess.page, id: finalShape.id };
+      setSelectedShapeLoc({ page: sess.page, id: finalShape.id });
+      toolModeRef.current = "select";
+      setToolMode("select");
+
+      commitHistoryEntry({
+        page: sess.page,
+        prevStrokes: curStrokes,
+        nextStrokes: curStrokes,
+        prevShapes,
+        nextShapes,
+      });
+      redrawPageCanvas(sess.page);
+      return;
+    }
+
+    // จบการย้าย / ปรับขนาด / หมุนรูปทรง
+    if (transformShapeRef.current && e.pointerId === transformShapeRef.current.pointerId) {
+      const tr = transformShapeRef.current;
+      transformShapeRef.current = null;
+      activeCanvasRectRef.current = null;
+      if (tr.changed) {
+        const afterShapes = shapesByPageRef.current[tr.page] || [];
+        const curStrokes = strokesByPageRef.current[tr.page] || [];
+        setShapesByPage({ ...shapesByPageRef.current });
+        commitHistoryEntry({
+          page: tr.page,
+          prevStrokes: curStrokes,
+          nextStrokes: curStrokes,
+          prevShapes: tr.initialShapesList,
+          nextShapes: afterShapes,
+        });
+      }
+      redrawPageCanvas(tr.page);
+      return;
+    }
+
+    // จบการลากกรอบเลือกเพื่อลบ (Lasso Delete)
+    if (lassoBoxRef.current && e.pointerId === lassoBoxRef.current.pointerId) {
+      const lb = lassoBoxRef.current;
+      lassoBoxRef.current = null;
+      activeCanvasRectRef.current = null;
+      const box = {
+        minX: Math.min(lb.startX, lb.curX),
+        maxX: Math.max(lb.startX, lb.curX),
+        minY: Math.min(lb.startY, lb.curY),
+        maxY: Math.max(lb.startY, lb.curY),
+      };
+
+      if (box.maxX - box.minX > 1 || box.maxY - box.minY > 1) {
+        const prevStrokes = strokesByPageRef.current[lb.page] || [];
+        const prevShapes = shapesByPageRef.current[lb.page] || [];
+        const nextStrokes = prevStrokes.filter((s) => !doesBoxIntersectStroke(box, s));
+        const nextShapes = prevShapes.filter((s) => !doesBoxIntersectShape(box, s));
+
+        if (
+          nextStrokes.length !== prevStrokes.length ||
+          nextShapes.length !== prevShapes.length
+        ) {
+          strokesByPageRef.current = {
+            ...strokesByPageRef.current,
+            [lb.page]: nextStrokes,
+          };
+          shapesByPageRef.current = {
+            ...shapesByPageRef.current,
+            [lb.page]: nextShapes,
+          };
+          setStrokesByPage({ ...strokesByPageRef.current });
+          setShapesByPage({ ...shapesByPageRef.current });
+          if (
+            selectedShapeLocRef.current?.page === lb.page &&
+            !nextShapes.some((s) => s.id === selectedShapeLocRef.current?.id)
+          ) {
+            selectedShapeLocRef.current = null;
+            setSelectedShapeLoc(null);
+          }
+          commitHistoryEntry({
+            page: lb.page,
+            prevStrokes,
+            nextStrokes,
+            prevShapes,
+            nextShapes,
+          });
+        }
+      }
+      redrawPageCanvas(lb.page);
+      return;
+    }
+
     if (eraseSessionRef.current && e.pointerId === eraseSessionRef.current.pointerId) {
       const sess = eraseSessionRef.current;
       eraseSessionRef.current = null;
       activeCanvasRectRef.current = null;
       if (sess.changed) {
-        const afterList = strokesByPageRef.current[sess.page] || [];
+        const afterStrokes = strokesByPageRef.current[sess.page] || [];
+        const afterShapes = shapesByPageRef.current[sess.page] || [];
         setStrokesByPage({ ...strokesByPageRef.current });
+        setShapesByPage({ ...shapesByPageRef.current });
         commitHistoryEntry({
           page: sess.page,
-          prev: sess.initialStrokes,
-          next: afterList,
+          prevStrokes: sess.initialStrokes,
+          nextStrokes: afterStrokes,
+          prevShapes: sess.initialShapes,
+          nextShapes: afterShapes,
         });
         redrawPageCanvas(sess.page);
       }
@@ -1655,6 +2195,142 @@ export function DirectorStampCanvas({
     }
   };
 
+  // --- ฟังก์ชันจัดการรูปทรงที่ถูกเลือก (ทำสำเนา, หมุน, จัดลำดับชั้น, ปรับสี/ความหนา/ความโปร่งใส) ---
+  const selectedShapeObj: PdfShapeItem | null = (() => {
+    if (!selectedShapeLoc) return null;
+    const list = shapesByPage[selectedShapeLoc.page] || [];
+    return list.find((s) => s.id === selectedShapeLoc.id) || null;
+  })();
+
+  const mutateSelectedShape = useCallback(
+    (updater: (shape: PdfShapeItem) => PdfShapeItem) => {
+      const loc = selectedShapeLocRef.current;
+      if (!loc) return;
+      const prevShapes = shapesByPageRef.current[loc.page] || [];
+      const exists = prevShapes.some((s) => s.id === loc.id);
+      if (!exists) return;
+
+      const nextShapes = prevShapes.map((s) => (s.id === loc.id ? updater(s) : s));
+      const curStrokes = strokesByPageRef.current[loc.page] || [];
+      shapesByPageRef.current = {
+        ...shapesByPageRef.current,
+        [loc.page]: nextShapes,
+      };
+      setShapesByPage({ ...shapesByPageRef.current });
+      commitHistoryEntry({
+        page: loc.page,
+        prevStrokes: curStrokes,
+        nextStrokes: curStrokes,
+        prevShapes,
+        nextShapes,
+      });
+      redrawPageCanvas(loc.page);
+    },
+    [commitHistoryEntry, redrawPageCanvas]
+  );
+
+  const handleDuplicateSelectedShape = () => {
+    const loc = selectedShapeLocRef.current;
+    if (!loc) return;
+    const prevShapes = shapesByPageRef.current[loc.page] || [];
+    const target = prevShapes.find((s) => s.id === loc.id);
+    if (!target) return;
+
+    const copy: PdfShapeItem = {
+      ...target,
+      id: `shape_${loc.page}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      xMm: Math.min(200, target.xMm + 7),
+      yMm: Math.min(285, target.yMm + 7),
+    };
+    const nextShapes = [...prevShapes, copy];
+    const curStrokes = strokesByPageRef.current[loc.page] || [];
+    shapesByPageRef.current = {
+      ...shapesByPageRef.current,
+      [loc.page]: nextShapes,
+    };
+    setShapesByPage({ ...shapesByPageRef.current });
+    selectedShapeLocRef.current = { page: loc.page, id: copy.id };
+    setSelectedShapeLoc({ page: loc.page, id: copy.id });
+    commitHistoryEntry({
+      page: loc.page,
+      prevStrokes: curStrokes,
+      nextStrokes: curStrokes,
+      prevShapes,
+      nextShapes,
+    });
+    redrawPageCanvas(loc.page);
+  };
+
+  const handleDeleteSelectedShape = () => {
+    const loc = selectedShapeLocRef.current;
+    if (!loc) return;
+    const prevShapes = shapesByPageRef.current[loc.page] || [];
+    const nextShapes = prevShapes.filter((s) => s.id !== loc.id);
+    if (nextShapes.length === prevShapes.length) return;
+
+    const curStrokes = strokesByPageRef.current[loc.page] || [];
+    shapesByPageRef.current = {
+      ...shapesByPageRef.current,
+      [loc.page]: nextShapes,
+    };
+    setShapesByPage({ ...shapesByPageRef.current });
+    selectedShapeLocRef.current = null;
+    setSelectedShapeLoc(null);
+    commitHistoryEntry({
+      page: loc.page,
+      prevStrokes: curStrokes,
+      nextStrokes: curStrokes,
+      prevShapes,
+      nextShapes,
+    });
+    redrawPageCanvas(loc.page);
+  };
+
+  const handleRotateSelectedShape = (deltaDeg: number) => {
+    const deltaRad = (deltaDeg * Math.PI) / 180;
+    mutateSelectedShape((s) => ({
+      ...s,
+      rotationRad: (s.rotationRad || 0) + deltaRad,
+    }));
+  };
+
+  const handleLayerSelectedShape = (
+    action: "front" | "forward" | "backward" | "back"
+  ) => {
+    const loc = selectedShapeLocRef.current;
+    if (!loc) return;
+    const prevShapes = shapesByPageRef.current[loc.page] || [];
+    const idx = prevShapes.findIndex((s) => s.id === loc.id);
+    if (idx === -1 || prevShapes.length <= 1) return;
+
+    const nextShapes = [...prevShapes];
+    const [item] = nextShapes.splice(idx, 1);
+    if (action === "front") {
+      nextShapes.push(item);
+    } else if (action === "back") {
+      nextShapes.unshift(item);
+    } else if (action === "forward") {
+      nextShapes.splice(Math.min(nextShapes.length, idx + 1), 0, item);
+    } else {
+      nextShapes.splice(Math.max(0, idx - 1), 0, item);
+    }
+
+    const curStrokes = strokesByPageRef.current[loc.page] || [];
+    shapesByPageRef.current = {
+      ...shapesByPageRef.current,
+      [loc.page]: nextShapes,
+    };
+    setShapesByPage({ ...shapesByPageRef.current });
+    commitHistoryEntry({
+      page: loc.page,
+      prevStrokes: curStrokes,
+      nextStrokes: curStrokes,
+      prevShapes,
+      nextShapes,
+    });
+    redrawPageCanvas(loc.page);
+  };
+
   const handleUndoStroke = () => {
     const past = strokeHistoryRef.current.past;
     if (past.length === 0) return;
@@ -1666,9 +2342,12 @@ export function DirectorStampCanvas({
     strokeHistoryRef.current = nextHistory;
     setStrokeHistory(nextHistory);
 
-    const nextMap = { ...strokesByPageRef.current, [entry.page]: entry.prev };
-    strokesByPageRef.current = nextMap;
-    setStrokesByPage(nextMap);
+    const nextStrokeMap = { ...strokesByPageRef.current, [entry.page]: entry.prevStrokes };
+    const nextShapeMap = { ...shapesByPageRef.current, [entry.page]: entry.prevShapes };
+    strokesByPageRef.current = nextStrokeMap;
+    shapesByPageRef.current = nextShapeMap;
+    setStrokesByPage(nextStrokeMap);
+    setShapesByPage(nextShapeMap);
     redrawPageCanvas(entry.page);
     if (entry.page !== pageNumberRef.current) {
       goToPage(entry.page);
@@ -1686,9 +2365,12 @@ export function DirectorStampCanvas({
     strokeHistoryRef.current = nextHistory;
     setStrokeHistory(nextHistory);
 
-    const nextMap = { ...strokesByPageRef.current, [entry.page]: entry.next };
-    strokesByPageRef.current = nextMap;
-    setStrokesByPage(nextMap);
+    const nextStrokeMap = { ...strokesByPageRef.current, [entry.page]: entry.nextStrokes };
+    const nextShapeMap = { ...shapesByPageRef.current, [entry.page]: entry.nextShapes };
+    strokesByPageRef.current = nextStrokeMap;
+    shapesByPageRef.current = nextShapeMap;
+    setStrokesByPage(nextStrokeMap);
+    setShapesByPage(nextShapeMap);
     redrawPageCanvas(entry.page);
     if (entry.page !== pageNumberRef.current) {
       goToPage(entry.page);
@@ -1696,12 +2378,26 @@ export function DirectorStampCanvas({
   };
 
   const handleClearPageStrokes = () => {
-    const curList = strokesByPageRef.current[pageNumber] || [];
-    if (curList.length === 0) return;
-    const nextMap = { ...strokesByPageRef.current, [pageNumber]: [] };
-    strokesByPageRef.current = nextMap;
-    setStrokesByPage(nextMap);
-    commitHistoryEntry({ page: pageNumber, prev: curList, next: [] });
+    const curStrokes = strokesByPageRef.current[pageNumber] || [];
+    const curShapes = shapesByPageRef.current[pageNumber] || [];
+    if (curStrokes.length === 0 && curShapes.length === 0) return;
+    const nextStrokeMap = { ...strokesByPageRef.current, [pageNumber]: [] };
+    const nextShapeMap = { ...shapesByPageRef.current, [pageNumber]: [] };
+    strokesByPageRef.current = nextStrokeMap;
+    shapesByPageRef.current = nextShapeMap;
+    setStrokesByPage(nextStrokeMap);
+    setShapesByPage(nextShapeMap);
+    if (selectedShapeLocRef.current?.page === pageNumber) {
+      selectedShapeLocRef.current = null;
+      setSelectedShapeLoc(null);
+    }
+    commitHistoryEntry({
+      page: pageNumber,
+      prevStrokes: curStrokes,
+      nextStrokes: [],
+      prevShapes: curShapes,
+      nextShapes: [],
+    });
     redrawPageCanvas(pageNumber);
   };
 
@@ -1834,7 +2530,9 @@ export function DirectorStampCanvas({
     renderSigPadCanvas();
   };
 
-  const currentPageStrokeCount = (strokesByPage[pageNumber] || []).length;
+  const currentPageStrokeCount =
+    (strokesByPage[pageNumber] || []).length +
+    (shapesByPage[pageNumber] || []).length;
   const sigsOnCurrentPage = sigPlacements.filter((s) => s.pageNumber === pageNumber);
   const sigPageSummaries = Array.from(
     sigPlacements.reduce((acc, s) => {
@@ -1942,8 +2640,16 @@ export function DirectorStampCanvas({
                 WebkitTouchCallout: "none",
               }}
               className={`w-full h-full block touch-none select-none ${
-                toolMode === "pen" || toolMode === "highlighter" || toolMode === "eraser"
+                toolMode === "pen" ||
+                toolMode === "highlighter" ||
+                toolMode === "pencil" ||
+                toolMode === "eraser" ||
+                toolMode === "object-eraser" ||
+                toolMode === "lasso-delete" ||
+                toolMode === "shape"
                   ? "cursor-crosshair"
+                  : toolMode === "select"
+                  ? "cursor-pointer"
                   : "cursor-grab active:cursor-grabbing"
               }`}
             />
@@ -1993,11 +2699,11 @@ export function DirectorStampCanvas({
                 </button>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-1">
+            <div className="grid grid-cols-4 gap-1">
               <button
                 type="button"
                 onClick={() => setToolMode("move-sig")}
-                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
                   toolMode === "move-sig"
                     ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -2009,7 +2715,7 @@ export function DirectorStampCanvas({
               <button
                 type="button"
                 onClick={() => setToolMode("pen")}
-                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
                   toolMode === "pen"
                     ? "bg-rose-600 text-white border-rose-600 shadow-xs"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -2021,7 +2727,7 @@ export function DirectorStampCanvas({
               <button
                 type="button"
                 onClick={() => setToolMode("highlighter")}
-                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
                   toolMode === "highlighter"
                     ? "bg-amber-500 text-slate-950 border-amber-500 shadow-xs"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -2030,13 +2736,51 @@ export function DirectorStampCanvas({
                 <Highlighter className="w-3 h-3 shrink-0" />
                 <span>ไฮไลต์</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setToolMode("pencil")}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                  toolMode === "pencil"
+                    ? "bg-slate-700 text-white border-slate-700 shadow-xs"
+                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                <Pencil className="w-3 h-3 shrink-0" />
+                <span>ดินสอ</span>
+              </button>
             </div>
-            <div className="grid grid-cols-2 gap-1">
+            <div className="grid grid-cols-4 gap-1">
+              <button
+                type="button"
+                onClick={() => setToolMode("shape")}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                  toolMode === "shape"
+                    ? "bg-violet-600 text-white border-violet-600 shadow-xs"
+                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                <Square className="w-3 h-3 shrink-0" />
+                <span>รูปทรง</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setToolMode("select")}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                  toolMode === "select"
+                    ? "bg-sky-600 text-white border-sky-600 shadow-xs"
+                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                <MousePointer2 className="w-3 h-3 shrink-0" />
+                <span>เลือก/ย้าย</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setToolMode("eraser")}
-                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 border transition-all ${
-                  toolMode === "eraser"
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                  toolMode === "eraser" ||
+                  toolMode === "object-eraser" ||
+                  toolMode === "lasso-delete"
                     ? "bg-rose-500 text-white border-rose-500 shadow-xs"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                 }`}
@@ -2047,7 +2791,7 @@ export function DirectorStampCanvas({
               <button
                 type="button"
                 onClick={() => setToolMode("pan")}
-                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 border transition-all ${
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
                   toolMode === "pan"
                     ? "bg-amber-600 text-white border-amber-600 shadow-xs"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
@@ -2058,7 +2802,7 @@ export function DirectorStampCanvas({
               </button>
             </div>
             <p className="text-[10px] leading-relaxed text-slate-500 bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
-              💡 แตะปุ่มวงกลมลอยมุมขวาของหน้า PDF เพื่อกางเครื่องมือปากกา ไฮไลต์ ยางลบ สี ขนาด และ Undo/Redo แบบ iPad (ลากย้ายได้)
+              💡 แตะปุ่มวงกลมลอยมุมขวาของหน้า PDF เพื่อเปิดเครื่องมือครบ 5 หมวด (1.เขียน · 2.ลบ · 3.รูปทรง · 4.จัดการ · 5.ปรับแต่ง)
             </p>
           </div>
 
@@ -2574,16 +3318,57 @@ export function DirectorStampCanvas({
               containerRef={pdfWorkspaceBoxRef}
               toolMode={toolMode}
               onToolModeChange={setToolMode}
-              penColor={penColor}
-              onPenColorChange={setPenColor}
-              penWidthMm={penBaseWidthMm}
-              onPenWidthChange={setPenBaseWidthMm}
+              activeShapeKind={activeShapeKind}
+              onActiveShapeKindChange={setActiveShapeKind}
+              penColor={selectedShapeObj ? selectedShapeObj.strokeColor : penColor}
+              onPenColorChange={(c) => {
+                setPenColor(c);
+                if (selectedShapeLocRef.current) {
+                  mutateSelectedShape((s) => ({ ...s, strokeColor: c }));
+                }
+              }}
+              penWidthMm={selectedShapeObj ? selectedShapeObj.strokeWidthMm : penBaseWidthMm}
+              onPenWidthChange={(w) => {
+                setPenBaseWidthMm(w);
+                if (selectedShapeLocRef.current) {
+                  mutateSelectedShape((s) => ({ ...s, strokeWidthMm: w }));
+                }
+              }}
               highlighterColor={highlighterColor}
               onHighlighterColorChange={setHighlighterColor}
               highlighterWidthMm={highlighterWidthMm}
               onHighlighterWidthChange={setHighlighterWidthMm}
               eraserRadiusMm={eraserRadiusMm}
               onEraserRadiusChange={setEraserRadiusMm}
+              strokeOpacity={selectedShapeObj ? selectedShapeObj.opacity : strokeOpacity}
+              onStrokeOpacityChange={(op) => {
+                setStrokeOpacity(op);
+                if (selectedShapeLocRef.current) {
+                  mutateSelectedShape((s) => ({ ...s, opacity: op }));
+                }
+              }}
+              shapeFillColor={selectedShapeObj ? selectedShapeObj.fillColor : shapeFillColor}
+              onShapeFillColorChange={(fc) => {
+                setShapeFillColor(fc);
+                setShapeFillEnabled(true);
+                if (selectedShapeLocRef.current) {
+                  mutateSelectedShape((s) => ({ ...s, fillColor: fc, fillEnabled: true }));
+                }
+              }}
+              shapeFillEnabled={
+                selectedShapeObj ? selectedShapeObj.fillEnabled : shapeFillEnabled
+              }
+              onShapeFillEnabledChange={(enabled) => {
+                setShapeFillEnabled(enabled);
+                if (selectedShapeLocRef.current) {
+                  mutateSelectedShape((s) => ({ ...s, fillEnabled: enabled }));
+                }
+              }}
+              selectedShape={selectedShapeObj}
+              onDuplicateSelectedShape={handleDuplicateSelectedShape}
+              onDeleteSelectedShape={handleDeleteSelectedShape}
+              onRotateSelectedShape={handleRotateSelectedShape}
+              onLayerSelectedShape={handleLayerSelectedShape}
               canUndo={canUndo}
               canRedo={canRedo}
               onUndo={handleUndoStroke}
