@@ -545,8 +545,8 @@ export function DirectorStampCanvas({
   const isToolbarExpandedRef = useRef(false);
 
   // โหมดการใช้งานบนกระดาษครบ 5 หมวด (เขียน, ลบ, รูปทรง, จัดการ, ปรับแต่ง)
-  const [toolMode, setToolMode] = useState<PdfWorkspaceToolMode>("move-sig");
-  const toolModeRef = useRef<PdfWorkspaceToolMode>("move-sig");
+  const [toolMode, setToolMode] = useState<PdfWorkspaceToolMode>("pen");
+  const toolModeRef = useRef<PdfWorkspaceToolMode>("pen");
   const [activeShapeKind, setActiveShapeKind] = useState<ShapeKind>("rect");
   const [penColor, setPenColor] = useState("#dc2626");
   const [penBaseWidthMm, setPenBaseWidthMm] = useState(0.65);
@@ -1000,15 +1000,11 @@ export function DirectorStampCanvas({
         setPageNumber(1);
         pageNumberRef.current = 1;
         setPageInput("1");
-        const initialPlacement = buildPlacementForPage(
-          pdf.numPages,
-          layoutRef.current,
-          []
-        );
-        sigPlacementsRef.current = [initialPlacement];
-        setSigPlacements([initialPlacement]);
-        selectedSigIdRef.current = initialPlacement.id;
-        setSelectedSigId(initialPlacement.id);
+        // ไม่วางลายเซ็นอัตโนมัติในหน้าสุดท้าย รอให้ ผอ. กดปุ่มวางลายเซ็นเองในหน้าที่ต้องการ
+        sigPlacementsRef.current = [];
+        setSigPlacements([]);
+        selectedSigIdRef.current = null;
+        setSelectedSigId(null);
         setPageDimsVersion((v) => v + 1);
       } catch (err: any) {
         if (!cancelled) {
@@ -2702,7 +2698,13 @@ export function DirectorStampCanvas({
             <div className="grid grid-cols-4 gap-1">
               <button
                 type="button"
-                onClick={() => setToolMode("move-sig")}
+                onClick={() => {
+                  if (sigPlacementsRef.current.length === 0) {
+                    addSignatureToPage(pageNumber);
+                  } else {
+                    setToolMode("move-sig");
+                  }
+                }}
                 className={`py-1.5 px-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border transition-all ${
                   toolMode === "move-sig"
                     ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
@@ -2812,25 +2814,30 @@ export function DirectorStampCanvas({
             <label className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
               <input
                 type="checkbox"
-                checked={layout.showSignatureOnDoc}
+                checked={layout.showSignatureOnDoc && sigPlacements.length > 0}
                 onChange={(e) => {
-                  const next = { ...layout, showSignatureOnDoc: e.target.checked };
+                  const wantShow = e.target.checked;
+                  const next = { ...layout, showSignatureOnDoc: wantShow };
+                  layoutRef.current = next;
                   setLayout(next);
                   saveLayoutToStorage(next);
+                  if (wantShow && sigPlacementsRef.current.length === 0) {
+                    addSignatureToPage(pageNumber);
+                  }
                 }}
                 className="accent-indigo-600 w-3.5 h-3.5"
               />
-              <span>ลายเซ็น ผอ. (จำไว้ใช้อัตโนมัติ)</span>
+              <span>ลายเซ็น ผอ. (กดเพื่อวางลงในหน้านี้)</span>
             </label>
             <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 type="button"
                 onClick={() => addSignatureToPage(pageNumber)}
                 className="text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200 inline-flex items-center gap-1"
-                title="วางลายเซ็น ผอ. เพิ่มอีกจุดลงบนหน้านี้ (ยังคงจุดที่วางไว้ในหน้าอื่น)"
+                title="วางลายเซ็น ผอ. ลงบนหน้านี้ (สามารถวางเพิ่มในหน้าอื่นได้อีก)"
               >
                 <Plus className="w-3 h-3" />
-                <span>เพิ่มลายเซ็นหน้า {pageNumber}</span>
+                <span>วางลายเซ็นหน้า {pageNumber}</span>
               </button>
               {sigDataUrl && (
                 <button
@@ -3317,7 +3324,13 @@ export function DirectorStampCanvas({
             <FloatingRadialToolbar
               containerRef={pdfWorkspaceBoxRef}
               toolMode={toolMode}
-              onToolModeChange={setToolMode}
+              onToolModeChange={(nextMode) => {
+                if (nextMode === "move-sig" && sigPlacementsRef.current.length === 0) {
+                  addSignatureToPage(pageNumber);
+                } else {
+                  setToolMode(nextMode);
+                }
+              }}
               activeShapeKind={activeShapeKind}
               onActiveShapeKindChange={setActiveShapeKind}
               penColor={selectedShapeObj ? selectedShapeObj.strokeColor : penColor}
