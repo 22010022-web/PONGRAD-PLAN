@@ -56,6 +56,19 @@ export default function ReviewPage() {
     loadPlansForReview();
   }, [user]);
 
+  // ซ่อน Scrollbar ของหน้าเว็บหลักด้านขวาสุดเมื่อเปิดหน้าต่างตรวจแผน เพื่อให้เลื่อนเฉพาะในกรอบ PDF เท่านั้น
+  useEffect(() => {
+    if (!selectedPlan || typeof document === "undefined") return;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+    };
+  }, [selectedPlan]);
+
   useEffect(() => {
     if (!isAdmin || plans.length === 0) return;
     const targetId =
@@ -405,8 +418,8 @@ export default function ReviewPage() {
 
       {/* Review & Interactive Stamp Modal */}
       {selectedPlan && (
-        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-1.5 sm:p-2.5 bg-slate-900/55 backdrop-blur-sm">
-          <div className="max-w-[98vw] xl:max-w-[1540px] w-full glass-panel rounded-2xl sm:rounded-3xl p-2.5 sm:p-4 border border-white/80 shadow-2xl flex flex-col gap-2 max-h-[97vh] lg:h-[96vh] overflow-y-auto lg:overflow-hidden">
+        <div className="fixed inset-0 !mt-0 z-[60] flex items-center justify-center p-1.5 sm:p-2.5 bg-slate-900/55 backdrop-blur-sm overflow-hidden">
+          <div className="max-w-[98vw] xl:max-w-[1540px] w-full glass-panel rounded-2xl sm:rounded-3xl p-2.5 sm:p-4 border border-white/80 shadow-2xl flex flex-col gap-2 h-[96vh] overflow-hidden">
             <div className="shrink-0 flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-2">
               <div>
                 <h3 className="font-display font-bold text-base sm:text-lg text-slate-800">
@@ -451,7 +464,7 @@ export default function ReviewPage() {
             )}
 
             {/* Interactive PDF Stamp & Comment Canvas */}
-            <div className="lg:flex-1 lg:min-h-0 flex flex-col">
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
               <DirectorStampCanvas
                 fileId={selectedPlan.post_file_id || selectedPlan.plan_file_id}
                 fileUrl={selectedPlan.post_file_url || selectedPlan.plan_file_url}

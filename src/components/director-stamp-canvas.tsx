@@ -2663,8 +2663,8 @@ export function DirectorStampCanvas({
     <div
       className={
         isFullscreenWorkspace
-          ? "fixed inset-2 z-[55] bg-slate-100 rounded-3xl p-2.5 sm:p-3.5 shadow-2xl border border-slate-300 grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch overflow-y-auto lg:overflow-hidden"
-          : "grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch lg:flex-1 lg:min-h-0"
+          ? "fixed inset-2 z-[55] bg-slate-100 rounded-3xl p-2.5 sm:p-3.5 shadow-2xl border border-slate-300 grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch overflow-hidden"
+          : "grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch flex-1 min-h-0 overflow-hidden"
       }
     >
       {/* ฝั่งซ้าย: แถบตั้งค่าลายเซ็น & หมายเหตุ (พับเก็บได้เพื่อขยายจอ PDF ให้ใหญ่เต็มตา) */}
