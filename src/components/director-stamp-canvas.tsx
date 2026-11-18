@@ -554,6 +554,7 @@ export function DirectorStampCanvas({
   const [highlighterWidthMm, setHighlighterWidthMm] = useState(6);
   const [eraserRadiusMm, setEraserRadiusMm] = useState(5.5);
   const [strokeOpacity, setStrokeOpacity] = useState(1);
+  const [shapeStrokeEnabled, setShapeStrokeEnabled] = useState(true);
   const [shapeFillColor, setShapeFillColor] = useState("#fef08a");
   const [shapeFillEnabled, setShapeFillEnabled] = useState(false);
 
@@ -1708,8 +1709,9 @@ export function DirectorStampCanvas({
         hMm: 1,
         rotationRad: 0,
         strokeColor: penColor,
+        strokeEnabled: shapeStrokeEnabled,
         fillColor: shapeFillColor,
-        fillEnabled: shapeFillEnabled,
+        fillEnabled: shapeStrokeEnabled ? shapeFillEnabled : true,
         strokeWidthMm: Math.max(0.45, penBaseWidthMm),
         opacity: strokeOpacity,
         flipX: false,
@@ -3360,8 +3362,13 @@ export function DirectorStampCanvas({
               penColor={selectedShapeObj ? selectedShapeObj.strokeColor : penColor}
               onPenColorChange={(c) => {
                 setPenColor(c);
+                setShapeStrokeEnabled(true);
                 if (selectedShapeLocRef.current) {
-                  mutateSelectedShape((s) => ({ ...s, strokeColor: c }));
+                  mutateSelectedShape((s) => ({
+                    ...s,
+                    strokeColor: c,
+                    strokeEnabled: true,
+                  }));
                 }
               }}
               penWidthMm={selectedShapeObj ? selectedShapeObj.strokeWidthMm : penBaseWidthMm}
@@ -3384,6 +3391,22 @@ export function DirectorStampCanvas({
                   mutateSelectedShape((s) => ({ ...s, opacity: op }));
                 }
               }}
+              shapeStrokeEnabled={
+                selectedShapeObj ? (selectedShapeObj.strokeEnabled ?? true) : shapeStrokeEnabled
+              }
+              onShapeStrokeEnabledChange={(enabled) => {
+                setShapeStrokeEnabled(enabled);
+                if (!enabled && !shapeFillEnabled) {
+                  setShapeFillEnabled(true);
+                }
+                if (selectedShapeLocRef.current) {
+                  mutateSelectedShape((s) => ({
+                    ...s,
+                    strokeEnabled: enabled,
+                    fillEnabled: !enabled && !s.fillEnabled ? true : s.fillEnabled,
+                  }));
+                }
+              }}
               shapeFillColor={selectedShapeObj ? selectedShapeObj.fillColor : shapeFillColor}
               onShapeFillColorChange={(fc) => {
                 setShapeFillColor(fc);
@@ -3397,8 +3420,16 @@ export function DirectorStampCanvas({
               }
               onShapeFillEnabledChange={(enabled) => {
                 setShapeFillEnabled(enabled);
+                if (!enabled && !shapeStrokeEnabled) {
+                  setShapeStrokeEnabled(true);
+                }
                 if (selectedShapeLocRef.current) {
-                  mutateSelectedShape((s) => ({ ...s, fillEnabled: enabled }));
+                  mutateSelectedShape((s) => ({
+                    ...s,
+                    fillEnabled: enabled,
+                    strokeEnabled:
+                      !enabled && !(s.strokeEnabled ?? true) ? true : (s.strokeEnabled ?? true),
+                  }));
                 }
               }}
               selectedShape={selectedShapeObj}

@@ -15,6 +15,7 @@ export interface PdfShapeItem {
   hMm: number; // ความสูง (mm, >= 2)
   rotationRad: number; // มุมหมุน (เรเดียน)
   strokeColor: string;
+  strokeEnabled?: boolean; // เปิด/ปิดเส้นขอบรูปทรง (ค่าเริ่มต้น true)
   fillColor: string;
   fillEnabled: boolean;
   strokeWidthMm: number;
@@ -228,27 +229,32 @@ export function renderPdfShape(
     shape.fillEnabled &&
     Boolean(shape.fillColor) &&
     shape.fillColor !== "transparent";
+  const hasStroke =
+    ((shape.strokeEnabled ?? true) &&
+      Boolean(shape.strokeColor) &&
+      shape.strokeColor !== "transparent") ||
+    !hasFill;
 
   switch (shape.kind) {
     case "rect": {
       ctx.beginPath();
       ctx.rect(-hw, -hh, hw * 2, hh * 2);
       if (hasFill) ctx.fill();
-      ctx.stroke();
+      if (hasStroke) ctx.stroke();
       break;
     }
     case "rounded-rect": {
       const r = Math.min(hw, hh) * 0.35;
       drawRoundedRectPath(ctx, -hw, -hh, hw * 2, hh * 2, r);
       if (hasFill) ctx.fill();
-      ctx.stroke();
+      if (hasStroke) ctx.stroke();
       break;
     }
     case "ellipse": {
       ctx.beginPath();
       ctx.ellipse(0, 0, hw, hh, 0, 0, Math.PI * 2);
       if (hasFill) ctx.fill();
-      ctx.stroke();
+      if (hasStroke) ctx.stroke();
       break;
     }
     case "triangle": {
@@ -258,7 +264,7 @@ export function renderPdfShape(
       ctx.lineTo(-hw, hh);
       ctx.closePath();
       if (hasFill) ctx.fill();
-      ctx.stroke();
+      if (hasStroke) ctx.stroke();
       break;
     }
     case "line": {

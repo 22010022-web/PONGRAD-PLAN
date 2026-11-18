@@ -96,6 +96,8 @@ interface FloatingRadialToolbarProps {
   onEraserRadiusChange: (mm: number) => void;
   strokeOpacity: number;
   onStrokeOpacityChange: (opacity: number) => void;
+  shapeStrokeEnabled: boolean;
+  onShapeStrokeEnabledChange: (enabled: boolean) => void;
   shapeFillColor: string;
   onShapeFillColorChange: (color: string) => void;
   shapeFillEnabled: boolean;
@@ -147,6 +149,8 @@ export function FloatingRadialToolbar({
   onEraserRadiusChange,
   strokeOpacity,
   onStrokeOpacityChange,
+  shapeStrokeEnabled,
+  onShapeStrokeEnabledChange,
   shapeFillColor,
   onShapeFillColorChange,
   shapeFillEnabled,
@@ -1059,21 +1063,42 @@ export function FloatingRadialToolbar({
 
                   {/* สีเส้นและสีพื้นสำหรับรูปทรง */}
                   <div className="space-y-2 pt-2 border-t border-slate-200">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-slate-800">
-                        สีเส้นรูปทรง:
-                      </span>
+                    <div className="flex items-center justify-between gap-1.5">
+                      <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-800 cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={shapeStrokeEnabled}
+                          onChange={(e) => onShapeStrokeEnabledChange(e.target.checked)}
+                          className="accent-indigo-600 w-3.5 h-3.5"
+                        />
+                        <span>สีเส้นรูปทรง:</span>
+                      </label>
                       <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onShapeStrokeEnabledChange(false)}
+                          className={`relative w-5 h-5 rounded-full border-2 bg-white overflow-hidden flex items-center justify-center ${
+                            !shapeStrokeEnabled
+                              ? "border-rose-600 scale-110 ring-2 ring-offset-1 ring-rose-500"
+                              : "border-slate-300 hover:border-rose-400"
+                          }`}
+                          title="ไม่เอาสีเส้น (ไม่มีเส้นขอบ)"
+                        >
+                          <span className="block w-6 h-0.5 bg-rose-600 -rotate-45" />
+                        </button>
                         {PEN_COLOR_PRESETS.map((c) => (
                           <button
                             key={c.color}
                             type="button"
-                            onClick={() => onPenColorChange(c.color)}
+                            onClick={() => {
+                              onShapeStrokeEnabledChange(true);
+                              onPenColorChange(c.color);
+                            }}
                             className={`w-5 h-5 rounded-full border-2 ${
-                              penColor === c.color
+                              shapeStrokeEnabled && penColor === c.color
                                 ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-indigo-600"
                                 : "border-slate-300"
-                            }`}
+                            } ${!shapeStrokeEnabled ? "opacity-55" : ""}`}
                             style={{ backgroundColor: c.color }}
                             title={c.label}
                           />
@@ -1081,8 +1106,8 @@ export function FloatingRadialToolbar({
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between pt-1">
-                      <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-800 cursor-pointer">
+                    <div className="flex items-center justify-between gap-1.5 pt-1">
+                      <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-800 cursor-pointer shrink-0">
                         <input
                           type="checkbox"
                           checked={shapeFillEnabled}
@@ -1091,24 +1116,34 @@ export function FloatingRadialToolbar({
                         />
                         <span>เติมสีพื้นรูปทรง</span>
                       </label>
-                      {shapeFillEnabled && (
-                        <div className="flex items-center gap-1.5">
-                          {SHAPE_FILL_PRESETS.map((c) => (
-                            <button
-                              key={c.color}
-                              type="button"
-                              onClick={() => onShapeFillColorChange(c.color)}
-                              className={`w-5 h-5 rounded-full border-2 ${
-                                shapeFillColor === c.color
-                                  ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-indigo-600"
-                                  : "border-slate-400"
-                              }`}
-                              style={{ backgroundColor: c.color }}
-                              title={c.label}
-                            />
-                          ))}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onShapeFillEnabledChange(false)}
+                          className={`relative w-5 h-5 rounded-full border-2 bg-white overflow-hidden flex items-center justify-center ${
+                            !shapeFillEnabled
+                              ? "border-rose-600 scale-110 ring-2 ring-offset-1 ring-rose-500"
+                              : "border-slate-300 hover:border-rose-400"
+                          }`}
+                          title="ไม่เอาสีพื้น (โปร่งใส)"
+                        >
+                          <span className="block w-6 h-0.5 bg-rose-600 -rotate-45" />
+                        </button>
+                        {SHAPE_FILL_PRESETS.map((c) => (
+                          <button
+                            key={c.color}
+                            type="button"
+                            onClick={() => onShapeFillColorChange(c.color)}
+                            className={`w-5 h-5 rounded-full border-2 ${
+                              shapeFillEnabled && shapeFillColor === c.color
+                                ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-indigo-600"
+                                : "border-slate-400"
+                            } ${!shapeFillEnabled ? "opacity-55" : ""}`}
+                            style={{ backgroundColor: c.color }}
+                            title={c.label}
+                          />
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1264,20 +1299,52 @@ export function FloatingRadialToolbar({
 
                   {/* สีเส้น (ปากกา / ดินสอ / รูปทรง) */}
                   <div className="space-y-1.5">
-                    <div className="text-[11px] font-bold text-slate-800">
-                      สีเส้น (ปากกา / ดินสอ / ขอบรูปทรง)
+                    <div className="flex items-center justify-between">
+                      <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-800 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={shapeStrokeEnabled}
+                          onChange={(e) => onShapeStrokeEnabledChange(e.target.checked)}
+                          className="accent-indigo-600 w-3.5 h-3.5"
+                        />
+                        <span>สีเส้น (ปากกา / ดินสอ / ขอบรูปทรง)</span>
+                      </label>
+                      <span
+                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          shapeStrokeEnabled
+                            ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                            : "bg-rose-50 text-rose-700 border border-rose-200"
+                        }`}
+                      >
+                        {shapeStrokeEnabled ? "มีเส้นขอบ" : "ไม่เอาสีเส้น"}
+                      </span>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => onShapeStrokeEnabledChange(false)}
+                        className={`relative w-6 h-6 rounded-full border-2 bg-white overflow-hidden flex items-center justify-center transition-transform ${
+                          !shapeStrokeEnabled
+                            ? "border-rose-600 scale-110 ring-2 ring-offset-1 ring-rose-500"
+                            : "border-slate-300 hover:scale-105 hover:border-rose-400"
+                        }`}
+                        title="ไม่เอาสีเส้น (ไม่มีเส้นขอบรูปทรง)"
+                      >
+                        <span className="block w-7 h-0.5 bg-rose-600 -rotate-45" />
+                      </button>
                       {PEN_COLOR_PRESETS.map((c) => (
                         <button
                           key={c.color}
                           type="button"
-                          onClick={() => onPenColorChange(c.color)}
+                          onClick={() => {
+                            onShapeStrokeEnabledChange(true);
+                            onPenColorChange(c.color);
+                          }}
                           className={`w-6 h-6 rounded-full border-2 transition-transform ${
-                            penColor === c.color
+                            shapeStrokeEnabled && penColor === c.color
                               ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-indigo-600"
                               : "border-slate-300 hover:scale-105"
-                          }`}
+                          } ${!shapeStrokeEnabled ? "opacity-55" : ""}`}
                           style={{ backgroundColor: c.color }}
                           title={c.label}
                         />
@@ -1289,7 +1356,10 @@ export function FloatingRadialToolbar({
                         <input
                           type="color"
                           value={penColor}
-                          onChange={(e) => onPenColorChange(e.target.value)}
+                          onChange={(e) => {
+                            onShapeStrokeEnabledChange(true);
+                            onPenColorChange(e.target.value);
+                          }}
                           className="opacity-0 w-full h-full cursor-pointer"
                         />
                       </label>
@@ -1318,35 +1388,45 @@ export function FloatingRadialToolbar({
                         {shapeFillEnabled ? "เปิดสีพื้น" : "ไม่มีสีพื้น"}
                       </span>
                     </div>
-                    {shapeFillEnabled && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {SHAPE_FILL_PRESETS.map((c) => (
-                          <button
-                            key={c.color}
-                            type="button"
-                            onClick={() => onShapeFillColorChange(c.color)}
-                            className={`w-6 h-6 rounded-full border-2 transition-transform ${
-                              shapeFillColor === c.color
-                                ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-indigo-600"
-                                : "border-slate-400 hover:scale-105"
-                            }`}
-                            style={{ backgroundColor: c.color }}
-                            title={c.label}
-                          />
-                        ))}
-                        <label
-                          title="เลือกสีพื้นเอง"
-                          className="w-6 h-6 rounded-full border-2 border-slate-400 overflow-hidden cursor-pointer flex items-center justify-center bg-gradient-to-tr from-yellow-300 via-pink-400 to-emerald-400"
-                        >
-                          <input
-                            type="color"
-                            value={shapeFillColor}
-                            onChange={(e) => onShapeFillColorChange(e.target.value)}
-                            className="opacity-0 w-full h-full cursor-pointer"
-                          />
-                        </label>
-                      </div>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => onShapeFillEnabledChange(false)}
+                        className={`relative w-6 h-6 rounded-full border-2 bg-white overflow-hidden flex items-center justify-center transition-transform ${
+                          !shapeFillEnabled
+                            ? "border-rose-600 scale-110 ring-2 ring-offset-1 ring-rose-500"
+                            : "border-slate-300 hover:scale-105 hover:border-rose-400"
+                        }`}
+                        title="ไม่เอาสีพื้น (โปร่งใส)"
+                      >
+                        <span className="block w-7 h-0.5 bg-rose-600 -rotate-45" />
+                      </button>
+                      {SHAPE_FILL_PRESETS.map((c) => (
+                        <button
+                          key={c.color}
+                          type="button"
+                          onClick={() => onShapeFillColorChange(c.color)}
+                          className={`w-6 h-6 rounded-full border-2 transition-transform ${
+                            shapeFillEnabled && shapeFillColor === c.color
+                              ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-indigo-600"
+                              : "border-slate-400 hover:scale-105"
+                          } ${!shapeFillEnabled ? "opacity-55" : ""}`}
+                          style={{ backgroundColor: c.color }}
+                          title={c.label}
+                        />
+                      ))}
+                      <label
+                        title="เลือกสีพื้นเอง"
+                        className="w-6 h-6 rounded-full border-2 border-slate-400 overflow-hidden cursor-pointer flex items-center justify-center bg-gradient-to-tr from-yellow-300 via-pink-400 to-emerald-400"
+                      >
+                        <input
+                          type="color"
+                          value={shapeFillColor}
+                          onChange={(e) => onShapeFillColorChange(e.target.value)}
+                          className="opacity-0 w-full h-full cursor-pointer"
+                        />
+                      </label>
+                    </div>
                   </div>
 
                   {/* ความหนาของเส้น */}
