@@ -37,7 +37,9 @@ export default function DashboardPage() {
   const [filterSubject, setFilterSubject] = useState("");
   const [filterScope, setFilterScope] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
-  const [sortOrder, setSortOrder] = useState<PlanSortOrder>("newest");
+  const [sortOrder, setSortOrder] = useState<PlanSortOrder | "volume">("newest");
+  const [currentPage, setCurrentPage] = useState(1);
+  const RECENT_PAGE_SIZE = 15;
 
   useEffect(() => {
     if (authLoading || user) {
@@ -179,15 +181,40 @@ export default function DashboardPage() {
           },
         ];
 
-  const filteredPlans = sortPlansByDate(
-    plans.filter((p) => {
-      if (showCombinedDashboard && filterTeacher && p.teacher_name !== filterTeacher) return false;
-      if (filterSubject && p.subject !== filterSubject) return false;
-      if (filterScope && getEffectiveScopeKind(p) !== filterScope) return false;
-      if (filterStatus && p.status !== filterStatus) return false;
-      return true;
-    }),
-    sortOrder
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterTeacher, filterSubject, filterScope, filterStatus, sortOrder]);
+
+  const teacherVolumeMap = plans.reduce<Record<string, number>>((acc, p) => {
+    const key = p.teacher_id || p.teacher_name || "unknown";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  const baseFilteredPlans = plans.filter((p) => {
+    if (showCombinedDashboard && filterTeacher && p.teacher_name !== filterTeacher) return false;
+    if (filterSubject && p.subject !== filterSubject) return false;
+    if (filterScope && getEffectiveScopeKind(p) !== filterScope) return false;
+    if (filterStatus && p.status !== filterStatus) return false;
+    return true;
+  });
+
+  const filteredPlans =
+    sortOrder === "volume"
+      ? [...baseFilteredPlans].sort((a, b) => {
+          const volA = teacherVolumeMap[a.teacher_id || a.teacher_name || "unknown"] || 0;
+          const volB = teacherVolumeMap[b.teacher_id || b.teacher_name || "unknown"] || 0;
+          if (volB !== volA) return volB - volA;
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        })
+      : sortPlansByDate(baseFilteredPlans, sortOrder);
+
+  const totalFilteredCount = filteredPlans.length;
+  const totalRecentPages = Math.max(1, Math.ceil(totalFilteredCount / RECENT_PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalRecentPages);
+  const paginatedPlans = filteredPlans.slice(
+    (safeCurrentPage - 1) * RECENT_PAGE_SIZE,
+    safeCurrentPage * RECENT_PAGE_SIZE
   );
 
   return (
@@ -465,10 +492,17 @@ export default function DashboardPage() {
       {/* Recent Submissions List & Filter */}
       <div className="glass-card rounded-3xl p-6 border border-white/80">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
-          <h2 className="font-display font-bold text-base sm:text-lg text-slate-800 flex items-center gap-2">
-            <span className="w-2.5 h-6 rounded-full bg-gradient-to-b from-purple-600 to-pink-600"></span>
-            {showCombinedDashboard ? "ประวัติการส่งแผนการจัดการเรียนรู้ล่าสุด" : "ประวัติการส่งแผนการจัดการเรียนรู้ของฉัน"}
-          </h2>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h2 className="font-display font-bold text-base sm:text-lg text-slate-800 flex items-center gap-2">
+              <span className="w-2.5 h-6 rounded-full bg-gradient-to-b from-purple-600 to-pink-600"></span>
+              {showCombinedDashboard
+                ? "ประวัติการส่งแผนการจัดการเรียนรู้ล่าสุด"
+                : "ประวัติการส่งแผนการจัดการเรียนรู้ของฉัน"}
+            </h2>
+            <span className="px-2.5 py-1 rounded-full bg-purple-100 text-purple-800 border border-purple-200 text-xs font-extrabold">
+              {RECENT_PAGE_SIZE}/{totalFilteredCount}
+            </span>
+          </div>
 
           <div className="flex flex-wrap gap-2 w-full sm:w-auto">
             {showCombinedDashboard && (
@@ -523,11 +557,12 @@ export default function DashboardPage() {
 
             <select
               value={sortOrder}
-              onChange={(e) => setSortOrder(e.target.value as PlanSortOrder)}
+              onChange={(e) => setSortOrder(e.target.value as PlanSortOrder | "volume")}
               className="text-xs rounded-xl glass-input px-3 py-2 text-pink-800 font-bold"
             >
               <option value="newest">เรียง: ส่งล่าสุดอยู่บน</option>
               <option value="oldest">เรียง: ส่งก่อนอยู่บน (ลำดับ 1 → ...)</option>
+              <option value="volume">เรียง: ตามปริมาณการส่ง (มาก → น้อย)</option>
             </select>
           </div>
         </div>
@@ -545,23 +580,27 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredPlans.length === 0 ? (
+              {paginatedPlans.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-400">
                     ไม่พบรายการข้อมูล
                   </td>
                 </tr>
               ) : (
-                filteredPlans.map((p) => {
+                paginatedPlans.map((p, idx) => {
+                  const rowNum = (safeCurrentPage - 1) * RECENT_PAGE_SIZE + idx + 1;
                   const order = orderMap[p.id];
                   const { dateText, timeText } = formatThaiDateTime(p.created_at);
                   return (
                   <tr key={p.id} className="hover:bg-white/60 transition-colors">
                     <td className="py-3 px-4 text-xs text-slate-500">
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full bg-purple-600 text-white font-extrabold text-[11px]">
+                          {rowNum}
+                        </span>
                         {order && (
                           <span className="px-1.5 py-0.5 rounded-md bg-pink-50 text-pink-700 border border-pink-200 font-bold text-[10px]">
-                            #{order.teacherOrder} (วิชา #{order.subjectOrder})
+                            ครั้งที่ #{order.teacherOrder} (วิชา #{order.subjectOrder})
                           </span>
                         )}
                       </div>
@@ -638,6 +677,56 @@ export default function DashboardPage() {
             </tbody>
           </table>
         </div>
+
+        {/* แถบแบ่งหน้า (15 รายการต่อหน้า · ปุ่มเลขหน้า 1, 2, 3... ตามปริมาณการส่งจริง) */}
+        {totalFilteredCount > 0 && (
+          <div className="mt-4 pt-3 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="text-slate-600 font-semibold">
+              แสดงหน้าละ{" "}
+              <span className="font-extrabold text-purple-700">
+                {RECENT_PAGE_SIZE}/{totalFilteredCount}
+              </span>{" "}
+              รายการ (รายการที่ {(safeCurrentPage - 1) * RECENT_PAGE_SIZE + 1}–
+              {Math.min(safeCurrentPage * RECENT_PAGE_SIZE, totalFilteredCount)} จากทั้งหมด{" "}
+              {totalFilteredCount} รายการ)
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                disabled={safeCurrentPage <= 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold disabled:opacity-40"
+              >
+                ก่อนหน้า
+              </button>
+
+              {Array.from({ length: totalRecentPages }, (_, i) => i + 1).map((pageNum) => (
+                <button
+                  key={pageNum}
+                  type="button"
+                  onClick={() => setCurrentPage(pageNum)}
+                  className={`min-w-[32px] h-8 px-2.5 rounded-xl border font-extrabold transition-all ${
+                    pageNum === safeCurrentPage
+                      ? "bg-purple-600 text-white border-purple-600 shadow-xs"
+                      : "bg-white text-slate-700 border-slate-200 hover:bg-purple-50 hover:text-purple-700"
+                  }`}
+                >
+                  {pageNum}
+                </button>
+              ))}
+
+              <button
+                type="button"
+                disabled={safeCurrentPage >= totalRecentPages}
+                onClick={() => setCurrentPage((p) => Math.min(totalRecentPages, p + 1))}
+                className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold disabled:opacity-40"
+              >
+                ถัดไป
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
           {/* ข่าวสารประชาสัมพันธ์ (กรณีเปิดแสดงแดชบอร์ดรวมหน้าแรกก่อนเข้าสู่ระบบ) */}
