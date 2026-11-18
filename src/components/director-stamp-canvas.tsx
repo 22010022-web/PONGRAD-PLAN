@@ -280,9 +280,64 @@ function isPointNearStroke(
   return false;
 }
 
+function extractValidCoalescedEvents(
+  e: React.PointerEvent<HTMLCanvasElement>
+): { clientX: number; clientY: number; pressure: number; pointerType: string }[] {
+  const native = e.nativeEvent as PointerEvent & {
+    getCoalescedEvents?: () => PointerEvent[];
+  };
+  let rawList: PointerEvent[] = [];
+  if (typeof native.getCoalescedEvents === "function") {
+    try {
+      rawList = native.getCoalescedEvents();
+    } catch {
+      rawList = [];
+    }
+  }
+  if (!rawList || rawList.length === 0) {
+    return [
+      {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        pressure: e.pressure,
+        pointerType: e.pointerType,
+      },
+    ];
+  }
+  const valid = rawList
+    .filter(
+      (ev) =>
+        !(
+          ev.clientX === 0 &&
+          ev.clientY === 0 &&
+          (e.clientX !== 0 || e.clientY !== 0)
+        )
+    )
+    .map((ev) => ({
+      clientX: ev.clientX,
+      clientY: ev.clientY,
+      pressure:
+        ev.pointerType === "pen" && ev.pressure === 0 && e.pressure > 0
+          ? e.pressure
+          : (ev.pressure ?? e.pressure),
+      pointerType: ev.pointerType || e.pointerType,
+    }));
+  if (valid.length === 0) {
+    return [
+      {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        pressure: e.pressure,
+        pointerType: e.pointerType,
+      },
+    ];
+  }
+  return valid;
+}
+
 /**
- * คำนวณน้ำหนักเส้นปากกาจากแรงกดจริงของ Apple Pencil (e.pressure)
- * หรือความเร็วการลากกรณีใช้เมาส์/นิ้วที่ไม่ส่งค่าแรงกดหลายระดับ
+ * คำนวณน้ำหนักเส้นปากกาจากแรงกดจริงของ Apple Pencil Pro / Stylus (e.pressure)
+ * หรือความเร็วการลากกรณีใช้ Apple Pencil USB-C / เมาส์ / นิ้วที่ไม่ส่งค่าแรงกดหลายระดับ
  */
 function computePointPressure(
   pointerType: string,
@@ -293,11 +348,15 @@ function computePointPressure(
   nowMs?: number
 ): number {
   if (pointerType === "pen" && rawPressure > 0 && rawPressure !== 0.5) {
-    // Apple Pencil / Stylus: ขยายช่วงแรงกดให้เห็นเส้นหนัก-เบาชัดเจนเหมือนปากกาหมึกซึม
-    return Math.max(0.28, Math.min(1.65, 0.3 + Math.pow(rawPressure, 0.85) * 1.35));
+    // Apple Pencil Pro / Stylus: เกลี่ยแรงกดเล็กน้อยให้เส้นหนัก-เบาสมูทระดับ 120Hz
+    const targetP = Math.max(
+      0.32,
+      Math.min(1.65, 0.34 + Math.pow(rawPressure, 0.82) * 1.31)
+    );
+    return prevPoint ? prevPoint.p * 0.35 + targetP * 0.65 : targetP;
   }
 
-  // กรณีเมาส์หรือนิ้ว: ปรับน้ำหนักเส้นตามความเร็วการตวัดปากกาอย่างเป็นธรรมชาติ + เฉลี่ยให้สมูท
+  // กรณี Apple Pencil (USB-C) / เมาส์ / นิ้ว: ปรับน้ำหนักเส้นตามความเร็วการตวัดปากกาอย่างเป็นธรรมชาติ
   if (prevPoint && xMm !== undefined && yMm !== undefined && nowMs && prevPoint.t) {
     const dt = Math.max(4, nowMs - prevPoint.t);
     const distMm = Math.hypot(xMm - prevPoint.xMm, yMm - prevPoint.yMm);
@@ -623,6 +682,10 @@ export function DirectorStampCanvas({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // ติ๊กโหมดปากกา iPad อัตโนมัติตลอดเวลา (Apple Pencil เขียนได้ทันที / นิ้วแตะเลื่อนหน้า / เมาส์ใช้งานได้ปกติ)
   const [ipadPencilOnly, setIpadPencilOnly] = useState(true);
+  const ipadPencilOnlyRef = useRef(true);
+  const touchGuardCleanupMapRef = useRef<Map<HTMLCanvasElement, () => void>>(
+    new Map()
+  );
   const [toolbarCollapseSignal, setToolbarCollapseSignal] = useState(0);
   const isToolbarExpandedRef = useRef(false);
 
@@ -758,6 +821,61 @@ export function DirectorStampCanvas({
   useEffect(() => {
     toolModeRef.current = toolMode;
   }, [toolMode]);
+
+  useEffect(() => {
+    ipadPencilOnlyRef.current = ipadPencilOnly;
+  }, [ipadPencilOnly]);
+
+  const attachCanvasTouchGuard = useCallback((el: HTMLCanvasElement | null) => {
+    if (!el || touchGuardCleanupMapRef.current.has(el)) return;
+    const preventStylusOrDrawTouch = (ev: TouchEvent) => {
+      const hasStylus =
+        Array.from(ev.touches).some((t: any) => t?.touchType === "stylus") ||
+        Array.from(ev.changedTouches).some((t: any) => t?.touchType === "stylus");
+      // บล็อก WebKit / iPadOS Scribble จากการแทรกแซงลายเส้น Apple Pencil บน canvas โดยตรง (non-passive)
+      if (
+        hasStylus ||
+        activeStrokeRef.current ||
+        creatingShapeRef.current ||
+        transformShapeRef.current ||
+        !ipadPencilOnlyRef.current
+      ) {
+        if (ev.cancelable) ev.preventDefault();
+      }
+    };
+    el.addEventListener("touchstart", preventStylusOrDrawTouch, { passive: false });
+    el.addEventListener("touchmove", preventStylusOrDrawTouch, { passive: false });
+    touchGuardCleanupMapRef.current.set(el, () => {
+      el.removeEventListener("touchstart", preventStylusOrDrawTouch);
+      el.removeEventListener("touchmove", preventStylusOrDrawTouch);
+    });
+  }, []);
+
+  const detachCanvasTouchGuard = useCallback((el: HTMLCanvasElement | null) => {
+    if (!el) return;
+    const cleanup = touchGuardCleanupMapRef.current.get(el);
+    if (cleanup) {
+      cleanup();
+      touchGuardCleanupMapRef.current.delete(el);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showDrawModal || !drawPadRef.current) return;
+    const el = drawPadRef.current;
+    attachCanvasTouchGuard(el);
+    return () => {
+      detachCanvasTouchGuard(el);
+    };
+  }, [showDrawModal, attachCanvasTouchGuard, detachCanvasTouchGuard]);
+
+  useEffect(() => {
+    const cleanupMap = touchGuardCleanupMapRef.current;
+    return () => {
+      cleanupMap.forEach((fn) => fn());
+      cleanupMap.clear();
+    };
+  }, []);
 
   useEffect(() => {
     layoutRef.current = layout;
@@ -1863,7 +1981,8 @@ export function DirectorStampCanvas({
       }
 
       const isWidePalmContact = (e.width && e.width > 34) || (e.height && e.height > 34);
-      const recentlyUsedStylus = now - lastStylusTimeRef.current < 950;
+      const palmGraceMs = ipadPencilOnly ? 160 : 950;
+      const recentlyUsedStylus = now - lastStylusTimeRef.current < palmGraceMs;
       if (currentTool !== "pan" && isDrawOrEraseTool && (recentlyUsedStylus || isWidePalmContact)) {
         return;
       }
@@ -2163,7 +2282,9 @@ export function DirectorStampCanvas({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === "pen") {
+    // อัปเดตเวลาเฉพาะเมื่อ Apple Pencil สัมผัสจอจริง (buttons > 0 หรือ pressure > 0)
+    // เพื่อไม่ให้ฟีเจอร์ Hover ของ Apple Pencil Pro ล็อกการเลื่อนหน้าด้วยนิ้ว
+    if (e.pointerType === "pen" && (e.buttons > 0 || e.pressure > 0)) {
       lastStylusTimeRef.current = performance.now();
     }
 
@@ -2173,10 +2294,7 @@ export function DirectorStampCanvas({
       const targetPage = activeStrokePageRef.current;
       const stroke = activeStrokeRef.current;
       const prevLen = stroke.points.length;
-      const coalesced: PointerEvent[] =
-        typeof (e.nativeEvent as any).getCoalescedEvents === "function"
-          ? (e.nativeEvent as any).getCoalescedEvents()
-          : [e.nativeEvent];
+      const coalesced = extractValidCoalescedEvents(e);
 
       const now = performance.now();
       for (const ev of coalesced) {
@@ -2189,8 +2307,8 @@ export function DirectorStampCanvas({
           stroke.tool === "highlighter"
             ? 1
             : computePointPressure(
-                ev.pointerType || e.pointerType,
-                ev.pressure ?? e.pressure,
+                ev.pointerType,
+                ev.pressure,
                 lastPt,
                 cx,
                 cy,
@@ -2313,10 +2431,7 @@ export function DirectorStampCanvas({
       if (e.pointerId !== eraseSessionRef.current.pointerId) return;
       const targetPage = eraseSessionRef.current.page;
       const isObjEraser = toolModeRef.current === "object-eraser";
-      const coalesced: PointerEvent[] =
-        typeof (e.nativeEvent as any).getCoalescedEvents === "function"
-          ? (e.nativeEvent as any).getCoalescedEvents()
-          : [e.nativeEvent];
+      const coalesced = extractValidCoalescedEvents(e);
       for (const ev of coalesced) {
         const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY, targetPage);
         eraseStrokesAtPoint(cx, cy, targetPage, isObjEraser);
@@ -2845,10 +2960,7 @@ export function DirectorStampCanvas({
     if (!cv || !stroke || e.pointerId !== sigPadPointerIdRef.current) return;
     const rect = sigPadRectRef.current || cv.getBoundingClientRect();
     const prevLen = stroke.points.length;
-    const coalesced: PointerEvent[] =
-      typeof (e.nativeEvent as any).getCoalescedEvents === "function"
-        ? (e.nativeEvent as any).getCoalescedEvents()
-        : [e.nativeEvent];
+    const coalesced = extractValidCoalescedEvents(e);
 
     const now = performance.now();
     for (const ev of coalesced) {
@@ -2857,8 +2969,8 @@ export function DirectorStampCanvas({
       const lastPt = stroke.points[stroke.points.length - 1];
       if (lastPt && Math.hypot(xMm - lastPt.xMm, yMm - lastPt.yMm) < 0.12) continue;
       const p = computePointPressure(
-        ev.pointerType || e.pointerType,
-        ev.pressure ?? e.pressure,
+        ev.pointerType,
+        ev.pressure,
         lastPt,
         xMm,
         yMm,
@@ -3020,9 +3132,15 @@ export function DirectorStampCanvas({
             <canvas
               ref={(el) => {
                 const prev = canvasRefs.current[pNum];
+                if (prev && prev !== el) {
+                  detachCanvasTouchGuard(prev);
+                }
                 canvasRefs.current[pNum] = el;
-                if (el && prev !== el && baseCanvasesRef.current.has(pNum)) {
-                  redrawPageCanvas(pNum);
+                if (el) {
+                  attachCanvasTouchGuard(el);
+                  if (prev !== el && baseCanvasesRef.current.has(pNum)) {
+                    redrawPageCanvas(pNum);
+                  }
                 }
               }}
               width={CANVAS_W}

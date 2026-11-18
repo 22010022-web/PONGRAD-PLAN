@@ -324,7 +324,8 @@ export function FloatingRadialToolbar({
     if (!drag || drag.pointerId !== e.pointerId) return;
     const dx = e.clientX - drag.startClientX;
     const dy = e.clientY - drag.startClientY;
-    if (!drag.moved && Math.hypot(dx, dy) > 6) {
+    const threshold = e.pointerType === "mouse" ? 6 : 12;
+    if (!drag.moved && Math.hypot(dx, dy) > threshold) {
       drag.moved = true;
     }
     if (!drag.moved) return;
