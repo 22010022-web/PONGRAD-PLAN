@@ -522,7 +522,7 @@ export default function ReviewPage() {
                     onClick={() => handleReviewAction("เสร็จสมบูรณ์", "plan_and_post")}
                     className="py-3 px-4 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 text-white text-xs sm:text-sm font-bold shadow hover:shadow-md transition-all disabled:opacity-50"
                   >
-                    ✔✔ อนุญาตใช้แผนการสอน (ประทับลายเซ็นเสร็จสมบูรณ์)
+                    ✔✔ อนุญาตให้ใช้แผนการจัดการเรียนรู้ (ลงนามเสร็จสมบูรณ์)
                   </button>
                 </div>
               ) : (
