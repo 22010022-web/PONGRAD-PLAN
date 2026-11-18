@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Copy,
   Eraser,
   FileText,
   Hand,
@@ -28,6 +29,7 @@ import {
   ScrollText,
   Square,
   Trash2,
+  Type,
   Undo2,
   X,
   ZoomIn,
@@ -126,6 +128,46 @@ interface SigPlacement {
   h: number; // mm
 }
 
+interface TextBoxPlacement {
+  id: string;
+  pageNumber: number;
+  x: number; // mm (0..210)
+  y: number; // mm
+  w: number; // mm
+  h: number; // mm
+  text: string;
+  color: string;
+  fontSizeMm: number;
+  bgColor: string;
+  showBorder: boolean;
+}
+
+const DIRECTOR_TEXT_PRESETS = [
+  "✔ อนุญาต",
+  "✗ ไม่อนุญาต",
+  "ดีมาก แผนครบถ้วนเหมาะสม",
+  "ควรปรับปรุงจุดประสงค์การเรียนรู้",
+  "แก้ไขตามจุดที่ทำเครื่องหมาย",
+  "เพิ่มเติมสื่อ/การวัดและประเมินผล",
+  "ตรวจสอบความถูกต้องของเนื้อหา",
+];
+
+const TEXT_BOX_COLOR_OPTIONS = [
+  { color: "#dc2626", label: "แดง" },
+  { color: "#1a2fa0", label: "น้ำเงิน" },
+  { color: "#059669", label: "เขียว" },
+  { color: "#7c3aed", label: "ม่วง" },
+  { color: "#0f172a", label: "ดำ" },
+];
+
+const TEXT_BOX_BG_OPTIONS = [
+  { color: "transparent", label: "โปร่งใส" },
+  { color: "#ffffff", label: "ขาวทึบ" },
+  { color: "#fef9c3", label: "เหลืองอ่อน" },
+  { color: "#ffe4e6", label: "ชมพูอ่อน" },
+  { color: "#dbeafe", label: "ฟ้าอ่อน" },
+];
+
 function buildPlacementForPage(
   targetPage: number,
   baseLayout: SigLayoutState,
@@ -142,6 +184,34 @@ function buildPlacementForPage(
     y: nextY,
     w: baseLayout.sigWidthMm,
     h: baseLayout.showSignerCaption ? 24 : 14,
+  };
+}
+
+function buildTextBoxPlacementForPage(
+  targetPage: number,
+  existingOnDoc: TextBoxPlacement[],
+  text: string,
+  color: string,
+  fontSizeMm: number,
+  bgColor: string,
+  showBorder: boolean
+): TextBoxPlacement {
+  const samePageCount = existingOnDoc.filter((t) => t.pageNumber === targetPage).length;
+  const offset = (samePageCount % 5) * 14;
+  const nextX = Math.max(8, Math.min(145, 28 + offset));
+  const nextY = Math.max(12, Math.min(250, 55 + offset));
+  return {
+    id: `txt_${targetPage}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    pageNumber: targetPage,
+    x: nextX,
+    y: nextY,
+    w: 52,
+    h: 14,
+    text: text.trim() || "ความเห็น ผอ.",
+    color,
+    fontSizeMm,
+    bgColor,
+    showBorder,
   };
 }
 
@@ -526,6 +596,18 @@ export function DirectorStampCanvas({
   const sigPlacementsRef = useRef<SigPlacement[]>([]);
   const [selectedSigId, setSelectedSigId] = useState<string | null>(null);
   const selectedSigIdRef = useRef<string | null>(null);
+
+  const [textPlacements, setTextPlacements] = useState<TextBoxPlacement[]>([]);
+  const textPlacementsRef = useRef<TextBoxPlacement[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const selectedTextIdRef = useRef<string | null>(null);
+  const [draftTextValue, setDraftTextValue] = useState("ควรปรับปรุงแก้ไขตามข้อเสนอแนะ");
+  const [draftTextColor, setDraftTextColor] = useState("#dc2626");
+  const [draftTextFontSizeMm, setDraftTextFontSizeMm] = useState(4.5);
+  const [draftTextBgColor, setDraftTextBgColor] = useState("transparent");
+  const [draftTextShowBorder, setDraftTextShowBorder] = useState(false);
+  const textBoxInputRef = useRef<HTMLTextAreaElement | null>(null);
+
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
@@ -657,6 +739,13 @@ export function DirectorStampCanvas({
     dx: number;
     dy: number;
   } | null>(null);
+  const dragTextRef = useRef<{
+    pointerId: number;
+    id: string;
+    page: number;
+    dx: number;
+    dy: number;
+  } | null>(null);
 
   const getPageHeightPx = useCallback((pNum: number) => {
     return pageHeightsRef.current[pNum] || defaultPageHeightRef.current;
@@ -681,6 +770,14 @@ export function DirectorStampCanvas({
   useEffect(() => {
     selectedSigIdRef.current = selectedSigId;
   }, [selectedSigId]);
+
+  useEffect(() => {
+    textPlacementsRef.current = textPlacements;
+  }, [textPlacements]);
+
+  useEffect(() => {
+    selectedTextIdRef.current = selectedTextId;
+  }, [selectedTextId]);
 
   useEffect(() => {
     strokesByPageRef.current = strokesByPage;
@@ -769,6 +866,93 @@ export function DirectorStampCanvas({
         ctx.setLineDash([6, 4]);
         ctx.fillRect(bx, by, bw, bh);
         ctx.strokeRect(bx, by, bw, bh);
+        ctx.restore();
+      }
+
+      // 1.8 วาดกล่องข้อความความเห็น ผอ. ทุกจุดในหน้านี้ (รองรับวางหลายจุด / หลายหน้าเหมือนลายเซ็น)
+      const pageTexts = textPlacementsRef.current.filter(
+        (t) => t.pageNumber === targetPage
+      );
+      for (const tb of pageTexts) {
+        const rawText = tb.text.trim();
+        if (!rawText && !showGuides) continue;
+        const displayStr = rawText || "พิมพ์ข้อความความเห็น ผอ....";
+
+        ctx.save();
+        const pt = Math.max(2.6, tb.fontSizeMm || 4.5) * k;
+        const lh = pt * 1.32;
+        ctx.font = `600 ${pt}px 'TH Sarabun New', Sarabun, sans-serif`;
+        ctx.textBaseline = "top";
+        ctx.textAlign = "left";
+
+        // รองรับขึ้นบรรทัดใหม่ และตัดคำอัตโนมัติหากข้อความยาวเกินหน้ากระดาษ
+        const maxLinePx = Math.max(45 * k, Math.min(165 * k, (204 - tb.x) * k));
+        const paragraphs = displayStr.split(/\r?\n/);
+        const wrappedLines: string[] = [];
+        for (const para of paragraphs) {
+          if (!para) {
+            wrappedLines.push("");
+            continue;
+          }
+          let currentLine = "";
+          for (const ch of Array.from(para)) {
+            const testLine = currentLine + ch;
+            if (currentLine && ctx.measureText(testLine).width > maxLinePx) {
+              wrappedLines.push(currentLine);
+              currentLine = ch;
+            } else {
+              currentLine = testLine;
+            }
+          }
+          if (currentLine) wrappedLines.push(currentLine);
+        }
+        if (wrappedLines.length === 0) wrappedLines.push(displayStr);
+
+        let maxW = 14 * k;
+        for (const line of wrappedLines) {
+          const wPx = ctx.measureText(line).width;
+          if (wPx > maxW) maxW = wPx;
+        }
+
+        const padX = 2.4 * k;
+        const padY = 1.6 * k;
+        const boxW = maxW + padX * 2;
+        const boxH = wrappedLines.length * lh + padY * 2;
+        tb.w = boxW / k;
+        tb.h = boxH / k;
+
+        const tx = tb.x * k;
+        const ty = tb.y * k;
+
+        if (tb.bgColor && tb.bgColor !== "transparent") {
+          ctx.fillStyle = tb.bgColor;
+          ctx.fillRect(tx, ty, boxW, boxH);
+        }
+
+        if (tb.showBorder) {
+          ctx.strokeStyle = tb.color || "#dc2626";
+          ctx.lineWidth = Math.max(1.5, 0.38 * k);
+          ctx.setLineDash([]);
+          ctx.strokeRect(tx, ty, boxW, boxH);
+        }
+
+        ctx.fillStyle = rawText ? tb.color || "#dc2626" : "rgba(100, 116, 139, 0.75)";
+        for (let i = 0; i < wrappedLines.length; i++) {
+          ctx.fillText(wrappedLines[i], tx + padX, ty + padY + i * lh);
+        }
+
+        if (showGuides) {
+          const isSelectedText = tb.id === selectedTextIdRef.current;
+          ctx.save();
+          ctx.strokeStyle = isSelectedText
+            ? "rgba(5, 150, 105, 0.95)"
+            : "rgba(14, 116, 144, 0.65)";
+          ctx.setLineDash([6, 4]);
+          ctx.lineWidth = isSelectedText ? 2.5 : 1.8;
+          ctx.strokeRect(tx - 4, ty - 4, boxW + 8, boxH + 8);
+          ctx.restore();
+        }
+
         ctx.restore();
       }
 
@@ -954,6 +1138,7 @@ export function DirectorStampCanvas({
       eraseSessionRef.current = null;
       panStartRef.current = null;
       dragSigRef.current = null;
+      dragTextRef.current = null;
       setLoadingPdf(true);
       setPdfError(null);
       try {
@@ -1006,6 +1191,10 @@ export function DirectorStampCanvas({
         setSigPlacements([]);
         selectedSigIdRef.current = null;
         setSelectedSigId(null);
+        textPlacementsRef.current = [];
+        setTextPlacements([]);
+        selectedTextIdRef.current = null;
+        setSelectedTextId(null);
         setPageDimsVersion((v) => v + 1);
       } catch (err: any) {
         if (!cancelled) {
@@ -1121,6 +1310,8 @@ export function DirectorStampCanvas({
     layout,
     sigPlacements,
     selectedSigId,
+    textPlacements,
+    selectedTextId,
     signDateIso,
     toolMode,
     viewMode,
@@ -1260,6 +1451,12 @@ export function DirectorStampCanvas({
         }
       }
 
+      for (const tb of textPlacementsRef.current) {
+        if (tb.text.trim()) {
+          pagesToExport.add(tb.pageNumber);
+        }
+      }
+
       if (pagesToExport.size === 0) return null;
 
       const overlays: { pageNumber: number; overlayPngDataUrl: string }[] = [];
@@ -1347,6 +1544,110 @@ export function DirectorStampCanvas({
       const fallbackId = nextList[0]?.id ?? null;
       selectedSigIdRef.current = fallbackId;
       setSelectedSigId(fallbackId);
+    }
+    redrawPageCanvas(targetPage);
+  };
+
+  const selectTextBoxPlacement = (tb: TextBoxPlacement) => {
+    selectedTextIdRef.current = tb.id;
+    setSelectedTextId(tb.id);
+    setDraftTextValue(tb.text);
+    setDraftTextColor(tb.color);
+    setDraftTextFontSizeMm(tb.fontSizeMm);
+    setDraftTextBgColor(tb.bgColor);
+    setDraftTextShowBorder(tb.showBorder);
+  };
+
+  const addTextBoxToPage = (targetPage: number, customText?: string) => {
+    const textToUse =
+      (customText !== undefined ? customText : draftTextValue).trim() ||
+      "ควรปรับปรุงแก้ไขตามข้อเสนอแนะ";
+    if (customText !== undefined) {
+      setDraftTextValue(textToUse);
+    }
+    const created = buildTextBoxPlacementForPage(
+      targetPage,
+      textPlacementsRef.current,
+      textToUse,
+      draftTextColor,
+      draftTextFontSizeMm,
+      draftTextBgColor,
+      draftTextShowBorder
+    );
+    const nextList = [...textPlacementsRef.current, created];
+    textPlacementsRef.current = nextList;
+    setTextPlacements(nextList);
+    selectedTextIdRef.current = created.id;
+    setSelectedTextId(created.id);
+    setToolMode("move-sig");
+    redrawPageCanvas(targetPage);
+  };
+
+  const updateSelectedTextBox = (updater: (tb: TextBoxPlacement) => TextBoxPlacement) => {
+    const selId = selectedTextIdRef.current;
+    if (!selId) return;
+    const target = textPlacementsRef.current.find((t) => t.id === selId);
+    if (!target) return;
+    const nextList = textPlacementsRef.current.map((t) =>
+      t.id === selId ? updater(t) : t
+    );
+    textPlacementsRef.current = nextList;
+    setTextPlacements(nextList);
+    redrawPageCanvas(target.pageNumber);
+  };
+
+  const duplicateTextBoxPlacement = (textId: string) => {
+    const target = textPlacementsRef.current.find((t) => t.id === textId);
+    if (!target) return;
+    const copy: TextBoxPlacement = {
+      ...target,
+      id: `txt_${target.pageNumber}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      x: Math.min(175, target.x + 8),
+      y: Math.min(270, target.y + 10),
+    };
+    const nextList = [...textPlacementsRef.current, copy];
+    textPlacementsRef.current = nextList;
+    setTextPlacements(nextList);
+    selectTextBoxPlacement(copy);
+    setToolMode("move-sig");
+    redrawPageCanvas(target.pageNumber);
+  };
+
+  const removeTextBoxPlacement = (textId: string) => {
+    const target = textPlacementsRef.current.find((t) => t.id === textId);
+    const nextList = textPlacementsRef.current.filter((t) => t.id !== textId);
+    textPlacementsRef.current = nextList;
+    setTextPlacements(nextList);
+    if (selectedTextIdRef.current === textId) {
+      const fallback = nextList[nextList.length - 1] ?? null;
+      selectedTextIdRef.current = fallback?.id ?? null;
+      setSelectedTextId(fallback?.id ?? null);
+      if (fallback) {
+        setDraftTextValue(fallback.text);
+        setDraftTextColor(fallback.color);
+        setDraftTextFontSizeMm(fallback.fontSizeMm);
+        setDraftTextBgColor(fallback.bgColor);
+        setDraftTextShowBorder(fallback.showBorder);
+      }
+    }
+    if (target) {
+      redrawPageCanvas(target.pageNumber);
+    }
+  };
+
+  const removeTextBoxesOnPage = (targetPage: number) => {
+    const nextList = textPlacementsRef.current.filter(
+      (t) => t.pageNumber !== targetPage
+    );
+    textPlacementsRef.current = nextList;
+    setTextPlacements(nextList);
+    if (
+      selectedTextIdRef.current &&
+      !nextList.some((t) => t.id === selectedTextIdRef.current)
+    ) {
+      const fallback = nextList[nextList.length - 1] ?? null;
+      selectedTextIdRef.current = fallback?.id ?? null;
+      setSelectedTextId(fallback?.id ?? null);
     }
     redrawPageCanvas(targetPage);
   };
@@ -1555,7 +1856,8 @@ export function DirectorStampCanvas({
         transformShapeRef.current ||
         lassoBoxRef.current ||
         eraseSessionRef.current ||
-        dragSigRef.current
+        dragSigRef.current ||
+        dragTextRef.current
       ) {
         return;
       }
@@ -1619,9 +1921,38 @@ export function DirectorStampCanvas({
       return false;
     };
 
-    // หากอยู่ในโหมดย้ายลายเซ็นหรือโหมดเลือก ให้ตรวจสอบการจับย้ายลายเซ็นและรูปทรงก่อนเสมอ (แม้ใช้ Apple Pencil)
+    const tryBeginTextBoxDrag = (): boolean => {
+      const pageTexts = textPlacementsRef.current.filter(
+        (t) => t.pageNumber === targetPage
+      );
+      for (let i = pageTexts.length - 1; i >= 0; i--) {
+        const tb = pageTexts[i];
+        if (
+          x >= tb.x - 4 &&
+          x <= tb.x + tb.w + 4 &&
+          y >= tb.y - 4 &&
+          y <= tb.y + tb.h + 4
+        ) {
+          e.preventDefault();
+          selectTextBoxPlacement(tb);
+          dragTextRef.current = {
+            pointerId: e.pointerId,
+            id: tb.id,
+            page: targetPage,
+            dx: x - tb.x,
+            dy: y - tb.y,
+          };
+          safeSetPointerCapture(e.currentTarget, e.pointerId);
+          redrawPageCanvas(targetPage);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // หากอยู่ในโหมดย้ายลายเซ็น/ข้อความ หรือโหมดเลือก ให้ตรวจสอบการจับย้ายกล่องข้อความ ลายเซ็น และรูปทรงก่อนเสมอ
     if (currentTool === "move-sig") {
-      if (tryBeginSignatureDrag()) {
+      if (tryBeginTextBoxDrag() || tryBeginSignatureDrag()) {
         if (isToolbarExpandedRef.current) {
           setToolbarCollapseSignal((n) => n + 1);
         }
@@ -1647,7 +1978,10 @@ export function DirectorStampCanvas({
         }
         return;
       }
-      if (currentTool === "select" && tryBeginSignatureDrag()) {
+      if (
+        currentTool === "select" &&
+        (tryBeginTextBoxDrag() || tryBeginSignatureDrag())
+      ) {
         return;
       }
       if (currentTool === "select" && selectedShapeLocRef.current) {
@@ -2005,6 +2339,21 @@ export function DirectorStampCanvas({
       return;
     }
 
+    // 3.5 โหมดลากย้ายกล่องข้อความความเห็น ผอ.
+    if (dragTextRef.current) {
+      if (e.pointerId !== dragTextRef.current.pointerId) return;
+      const { id: textId, page: textTargetPage, dx, dy } = dragTextRef.current;
+      const [x, y] = clientCoordsToMm(e.clientX, e.clientY, textTargetPage);
+      const nextX = Math.max(2, Math.min(198, x - dx));
+      const nextY = Math.max(2, Math.min(288, y - dy));
+
+      textPlacementsRef.current = textPlacementsRef.current.map((t) =>
+        t.id === textId ? { ...t, x: nextX, y: nextY } : t
+      );
+      scheduleSinglePageRedraw(textTargetPage);
+      return;
+    }
+
     // 4. โหมดเลื่อนกระดาษ (pan)
     if (panStartRef.current) {
       if (e.pointerId !== panStartRef.current.pointerId) return;
@@ -2209,6 +2558,15 @@ export function DirectorStampCanvas({
         saveLayoutToStorage(layoutRef.current);
       }
       redrawPageCanvas(sigPage);
+      return;
+    }
+
+    if (dragTextRef.current && e.pointerId === dragTextRef.current.pointerId) {
+      const { page: textPage } = dragTextRef.current;
+      dragTextRef.current = null;
+      activeCanvasRectRef.current = null;
+      setTextPlacements([...textPlacementsRef.current]);
+      redrawPageCanvas(textPage);
       return;
     }
 
@@ -2564,6 +2922,17 @@ export function DirectorStampCanvas({
   )
     .sort((a, b) => a[0] - b[0])
     .map(([pNum, count]) => ({ pageNumber: pNum, count }));
+  const textsOnCurrentPage = textPlacements.filter((t) => t.pageNumber === pageNumber);
+  const textPageSummaries = Array.from(
+    textPlacements.reduce((acc, t) => {
+      acc.set(t.pageNumber, (acc.get(t.pageNumber) || 0) + 1);
+      return acc;
+    }, new Map<number, number>())
+  )
+    .sort((a, b) => a[0] - b[0])
+    .map(([pNum, count]) => ({ pageNumber: pNum, count }));
+  const selectedTextObj =
+    textPlacements.find((t) => t.id === selectedTextId) || null;
   const canUndo = strokeHistory.past.length > 0;
   const canRedo = strokeHistory.future.length > 0;
   const baseDisplayWidth = isFullscreenWorkspace
@@ -2608,6 +2977,7 @@ export function DirectorStampCanvas({
     const sigCountForSlot = layout.showSignatureOnDoc
       ? sigPlacements.filter((s) => s.pageNumber === pNum).length
       : 0;
+    const textCountForSlot = textPlacements.filter((t) => t.pageNumber === pNum).length;
 
     return (
       <div
@@ -2627,11 +2997,18 @@ export function DirectorStampCanvas({
             <span>
               หน้า {pNum} / {totalPages}
             </span>
-            {sigCountForSlot > 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-bold">
-                มีลายเซ็น ผอ.{sigCountForSlot > 1 ? ` (${sigCountForSlot} จุด)` : ""}
-              </span>
-            )}
+            <div className="flex items-center gap-1.5">
+              {textCountForSlot > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                  ข้อความความเห็น{textCountForSlot > 1 ? ` (${textCountForSlot} จุด)` : ""}
+                </span>
+              )}
+              {sigCountForSlot > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-bold">
+                  มีลายเซ็น ผอ.{sigCountForSlot > 1 ? ` (${sigCountForSlot} จุด)` : ""}
+                </span>
+              )}
+            </div>
           </div>
         )}
 
@@ -2654,6 +3031,33 @@ export function DirectorStampCanvas({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
+              onDoubleClick={(e) => {
+                cachePageCanvasRect(pNum);
+                const [x, y] = clientCoordsToMm(e.clientX, e.clientY, pNum);
+                const pageTexts = textPlacementsRef.current.filter(
+                  (t) => t.pageNumber === pNum
+                );
+                for (let i = pageTexts.length - 1; i >= 0; i--) {
+                  const tb = pageTexts[i];
+                  if (
+                    x >= tb.x - 4 &&
+                    x <= tb.x + tb.w + 4 &&
+                    y >= tb.y - 4 &&
+                    y <= tb.y + tb.h + 4
+                  ) {
+                    selectTextBoxPlacement(tb);
+                    setToolMode("move-sig");
+                    if (sidebarCollapsed) {
+                      setSidebarCollapsed(false);
+                    }
+                    setTimeout(() => {
+                      textBoxInputRef.current?.focus();
+                      textBoxInputRef.current?.select();
+                    }, 60);
+                    return;
+                  }
+                }
+              }}
               onContextMenu={(e) => e.preventDefault()}
               style={{
                 touchAction: "none",
@@ -2833,6 +3237,264 @@ export function DirectorStampCanvas({
               💡 แตะปุ่มวงกลมลอยมุมขวาของหน้า PDF เพื่อเปิดเครื่องมือครบ 5 หมวด (1.เขียน · 2.ลบ · 3.รูปทรง · 4.จัดการ · 5.ปรับแต่ง)
             </p>
           </div>
+
+        {/* กล่องข้อความความเห็น ผอ. บนหน้า PDF (วางได้หลายจุด/หลายหน้าเหมือนลายเซ็น) */}
+        <div className="p-3 rounded-xl bg-white border border-emerald-200/90 space-y-2 shadow-2xs">
+          <div className="flex items-center justify-between gap-1.5 flex-wrap">
+            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800">
+              <Type className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>กล่องข้อความบน PDF (พิมพ์แทนปากกา)</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => addTextBoxToPage(pageNumber)}
+              className="text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1 rounded-lg shadow-2xs inline-flex items-center gap-1"
+              title="วางกล่องข้อความความเห็นลงบนหน้านี้ (ลากย้ายไปจุดไหนก็ได้ และวางเพิ่มได้หลายจุด)"
+            >
+              <Plus className="w-3 h-3" />
+              <span>วางข้อความหน้า {pageNumber}</span>
+            </button>
+          </div>
+
+          {selectedTextObj && (
+            <div className="flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-900">
+              <span>
+                กำลังแก้ไขกล่องข้อความ (หน้า {selectedTextObj.pageNumber}) — ลากย้ายบน PDF ได้ทันที
+              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => duplicateTextBoxPlacement(selectedTextObj.id)}
+                  className="px-1.5 py-0.5 rounded bg-white hover:bg-emerald-100 text-emerald-700 border border-emerald-300 inline-flex items-center gap-0.5"
+                  title="คัดลอกกล่องข้อความนี้เพิ่มอีกจุด"
+                >
+                  <Copy className="w-2.5 h-2.5" />
+                  <span>คัดลอก</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeTextBoxPlacement(selectedTextObj.id)}
+                  className="px-1.5 py-0.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 inline-flex items-center gap-0.5"
+                  title="ลบกล่องข้อความนี้"
+                >
+                  <Trash2 className="w-2.5 h-2.5" />
+                  <span>ลบ</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <textarea
+            ref={textBoxInputRef}
+            value={selectedTextObj ? selectedTextObj.text : draftTextValue}
+            onChange={(e) => {
+              const val = e.target.value;
+              setDraftTextValue(val);
+              if (selectedTextIdRef.current) {
+                updateSelectedTextBox((tb) => ({ ...tb, text: val }));
+              }
+            }}
+            rows={2}
+            placeholder="พิมพ์ความเห็นหรือข้อเสนอแนะที่จะวางบนหน้า PDF..."
+            className="w-full p-2 rounded-xl border border-slate-300 text-xs text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+
+          {/* ปุ่มคำสำเร็จรูปคลิกเดียววางหรือเปลี่ยนข้อความทันที */}
+          <div className="space-y-1">
+            <span className="block text-[10px] font-bold text-slate-500">
+              ข้อความด่วน (แตะเพื่อวางลงหน้า {pageNumber} ทันที):
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {DIRECTOR_TEXT_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => {
+                    setDraftTextValue(preset);
+                    if (
+                      selectedTextObj &&
+                      selectedTextObj.pageNumber === pageNumber
+                    ) {
+                      updateSelectedTextBox((tb) => ({ ...tb, text: preset }));
+                    } else {
+                      addTextBoxToPage(pageNumber, preset);
+                    }
+                  }}
+                  className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border border-slate-200 hover:border-emerald-300 text-[10px] font-semibold transition-colors"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ปรับสีตัวอักษร สีพื้นหลัง และขนาดอักษร */}
+          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100 items-center">
+            <div className="space-y-1">
+              <span className="block text-[10px] font-bold text-slate-600">สีตัวอักษร</span>
+              <div className="flex items-center gap-1.5">
+                {TEXT_BOX_COLOR_OPTIONS.map((c) => {
+                  const activeColor = selectedTextObj
+                    ? selectedTextObj.color
+                    : draftTextColor;
+                  return (
+                    <button
+                      key={c.color}
+                      type="button"
+                      onClick={() => {
+                        setDraftTextColor(c.color);
+                        if (selectedTextIdRef.current) {
+                          updateSelectedTextBox((tb) => ({ ...tb, color: c.color }));
+                        }
+                      }}
+                      className={`w-5 h-5 rounded-full border-2 ${
+                        activeColor === c.color
+                          ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-emerald-600"
+                          : "border-slate-300"
+                      }`}
+                      style={{ backgroundColor: c.color }}
+                      title={c.label}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-600">สีพื้นกล่อง</span>
+                <label className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={
+                      selectedTextObj ? selectedTextObj.showBorder : draftTextShowBorder
+                    }
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setDraftTextShowBorder(checked);
+                      if (selectedTextIdRef.current) {
+                        updateSelectedTextBox((tb) => ({ ...tb, showBorder: checked }));
+                      }
+                    }}
+                    className="accent-emerald-600 w-3 h-3"
+                  />
+                  <span>ตีกรอบ</span>
+                </label>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {TEXT_BOX_BG_OPTIONS.map((bg) => {
+                  const activeBg = selectedTextObj
+                    ? selectedTextObj.bgColor
+                    : draftTextBgColor;
+                  const isTransparent = bg.color === "transparent";
+                  return (
+                    <button
+                      key={bg.color}
+                      type="button"
+                      onClick={() => {
+                        setDraftTextBgColor(bg.color);
+                        if (selectedTextIdRef.current) {
+                          updateSelectedTextBox((tb) => ({ ...tb, bgColor: bg.color }));
+                        }
+                      }}
+                      className={`relative w-5 h-5 rounded-full border-2 overflow-hidden flex items-center justify-center ${
+                        activeBg === bg.color
+                          ? "border-slate-900 scale-110 ring-2 ring-offset-1 ring-emerald-600"
+                          : "border-slate-300"
+                      }`}
+                      style={{
+                        backgroundColor: isTransparent ? "#ffffff" : bg.color,
+                      }}
+                      title={bg.label}
+                    >
+                      {isTransparent && (
+                        <span className="block w-6 h-0.5 bg-rose-500 -rotate-45" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-1">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 mb-0.5">
+              <span>ขนาดตัวอักษร</span>
+              <span className="text-emerald-700">
+                {(selectedTextObj ? selectedTextObj.fontSizeMm : draftTextFontSizeMm).toFixed(1)} มม.
+              </span>
+            </div>
+            <input
+              type="range"
+              min={3.0}
+              max={8.0}
+              step={0.2}
+              value={selectedTextObj ? selectedTextObj.fontSizeMm : draftTextFontSizeMm}
+              onChange={(e) => {
+                const sz = Number(e.target.value);
+                setDraftTextFontSizeMm(sz);
+                if (selectedTextIdRef.current) {
+                  updateSelectedTextBox((tb) => ({ ...tb, fontSizeMm: sz }));
+                }
+              }}
+              className="w-full h-1.5 accent-emerald-600 cursor-pointer"
+            />
+          </div>
+
+          {/* รายการจุดข้อความที่วางไว้ทั้งหมด */}
+          <div className="space-y-1.5 pt-1 text-[11px] text-slate-600 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span>
+                จุดข้อความทั้งหมด:{" "}
+                <b className="text-emerald-700">{textPlacements.length} จุด</b> (
+                {textPageSummaries.length} หน้า)
+              </span>
+              {textPlacements.length > 0 && (
+                <span className="text-[10px] text-slate-500">
+                  แตะรายการเพื่อแก้ไขหรือลากย้ายบน PDF
+                </span>
+              )}
+            </div>
+            {textPlacements.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {textPlacements.map((tb, idx) => (
+                  <div
+                    key={tb.id}
+                    className={`inline-flex items-center rounded-lg border text-[10px] font-bold overflow-hidden max-w-full ${
+                      tb.id === selectedTextId
+                        ? "border-emerald-500 bg-emerald-50 text-emerald-900"
+                        : tb.pageNumber === pageNumber
+                        ? "border-teal-300 bg-teal-50/70 text-teal-800"
+                        : "border-slate-200 bg-slate-50 text-slate-700"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        selectTextBoxPlacement(tb);
+                        setToolMode("move-sig");
+                        goToPage(tb.pageNumber);
+                      }}
+                      title={`กระโดดไปจุดข้อความที่ ${idx + 1} (หน้า ${tb.pageNumber}): ${tb.text}`}
+                      className="px-1.5 py-0.5 hover:bg-white/60 truncate max-w-[140px]"
+                    >
+                      หน้า {tb.pageNumber}: {tb.text.slice(0, 14)}
+                      {tb.text.length > 14 ? "…" : ""}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeTextBoxPlacement(tb.id)}
+                      title={`ลบกล่องข้อความหน้า ${tb.pageNumber}`}
+                      className="px-1 py-0.5 text-rose-500 hover:bg-rose-100 hover:text-rose-700 shrink-0"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* ลายเซ็น ผอ. */}
         <div className="p-3 rounded-xl bg-white border border-slate-200/80 space-y-2">
@@ -3274,6 +3936,29 @@ export function DirectorStampCanvas({
               <button
                 type="button"
                 disabled={loadingPdf}
+                onClick={() => addTextBoxToPage(pageNumber)}
+                className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-40"
+                title="วางกล่องข้อความความเห็น ผอ. ลงในหน้าปัจจุบัน (วางได้หลายจุดและหลายหน้า)"
+              >
+                <Type className="w-3 h-3" />
+                <span>+ เพิ่มข้อความหน้า {pageNumber}</span>
+              </button>
+
+              {textsOnCurrentPage.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => removeTextBoxesOnPage(pageNumber)}
+                  className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold inline-flex items-center gap-1"
+                  title={`ลบกล่องข้อความทั้งหมดในหน้า ${pageNumber}`}
+                >
+                  <X className="w-3 h-3" />
+                  <span>ลบข้อความหน้านี้</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                disabled={loadingPdf}
                 onClick={() => addSignatureToPage(pageNumber)}
                 className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-40"
                 title="วางลายเซ็น ผอ. ลงในหน้าปัจจุบัน (สามารถวางได้หลายหน้าและหลายจุด)"
@@ -3351,7 +4036,11 @@ export function DirectorStampCanvas({
               containerRef={pdfWorkspaceBoxRef}
               toolMode={toolMode}
               onToolModeChange={(nextMode) => {
-                if (nextMode === "move-sig" && sigPlacementsRef.current.length === 0) {
+                if (
+                  nextMode === "move-sig" &&
+                  sigPlacementsRef.current.length === 0 &&
+                  textPlacementsRef.current.length === 0
+                ) {
                   addSignatureToPage(pageNumber);
                 } else {
                   setToolMode(nextMode);
@@ -3445,6 +4134,16 @@ export function DirectorStampCanvas({
               onClearPageStrokes={handleClearPageStrokes}
               ipadPencilOnly={ipadPencilOnly}
               onIpadPencilOnlyChange={setIpadPencilOnly}
+              onAddTextBox={() => {
+                addTextBoxToPage(pageNumber);
+                if (sidebarCollapsed) {
+                  setSidebarCollapsed(false);
+                }
+                setTimeout(() => {
+                  textBoxInputRef.current?.focus();
+                  textBoxInputRef.current?.select();
+                }, 60);
+              }}
               collapseSignal={toolbarCollapseSignal}
               onExpandedChange={(exp) => {
                 isToolbarExpandedRef.current = exp;

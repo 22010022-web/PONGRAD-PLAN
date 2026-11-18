@@ -28,6 +28,7 @@ import {
   Square,
   Trash2,
   Triangle,
+  Type,
   Undo2,
   X,
 } from "lucide-react";
@@ -115,6 +116,7 @@ interface FloatingRadialToolbarProps {
   onClearPageStrokes: () => void;
   ipadPencilOnly: boolean;
   onIpadPencilOnlyChange: (enabled: boolean) => void;
+  onAddTextBox?: () => void;
   collapseSignal?: number;
   onExpandedChange?: (expanded: boolean) => void;
 }
@@ -168,6 +170,7 @@ export function FloatingRadialToolbar({
   onClearPageStrokes,
   ipadPencilOnly,
   onIpadPencilOnlyChange,
+  onAddTextBox,
   collapseSignal = 0,
   onExpandedChange,
 }: FloatingRadialToolbarProps) {
@@ -1178,7 +1181,7 @@ export function FloatingRadialToolbar({
                       }`}
                     >
                       <Move className="w-4 h-4" />
-                      <span>ย้ายลายเซ็น</span>
+                      <span>ย้ายลายเซ็น/ข้อความ</span>
                     </button>
                     <button
                       type="button"
@@ -1193,6 +1196,17 @@ export function FloatingRadialToolbar({
                       <span>เลื่อนหน้า</span>
                     </button>
                   </div>
+
+                  {onAddTextBox && (
+                    <button
+                      type="button"
+                      onClick={onAddTextBox}
+                      className="w-full py-1.5 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold flex items-center justify-center gap-1.5 shadow-xs"
+                    >
+                      <Type className="w-3.5 h-3.5" />
+                      <span>+ วางกล่องข้อความความเห็นบนหน้านี้</span>
+                    </button>
+                  )}
 
                   {selectedShape ? (
                     <div className="space-y-2 pt-2 border-t border-slate-200">
