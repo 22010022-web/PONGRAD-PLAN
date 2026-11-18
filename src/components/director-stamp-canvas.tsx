@@ -313,6 +313,80 @@ function renderPressureStroke(
   ctx.restore();
 }
 
+/**
+ * วาดจุดเริ่มต้นของเส้นปากกาทันทีที่แตะหน้าจอ (Zero-Latency Initial Dot)
+ */
+function renderPenStrokeDot(
+  ctx: CanvasRenderingContext2D,
+  stroke: PenStroke,
+  mmToPx: number
+) {
+  const pts = stroke.points;
+  if (!pts || pts.length === 0) return;
+  const p0 = pts[0];
+  const basePx = Math.max(1.2, stroke.baseWidthMm * mmToPx);
+
+  ctx.save();
+  ctx.fillStyle = stroke.color;
+  if (stroke.tool === "highlighter") {
+    ctx.globalAlpha = stroke.opacity ?? 0.34;
+    ctx.beginPath();
+    ctx.arc(p0.xMm * mmToPx, p0.yMm * mmToPx, Math.max(2, basePx / 2), 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const r = (basePx * (p0.p || 1)) / 2;
+    ctx.beginPath();
+    ctx.arc(p0.xMm * mmToPx, p0.yMm * mmToPx, Math.max(0.8, r), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/**
+ * วาดเฉพาะส่วนโค้งที่เพิ่งลากเพิ่มเข้ามาในแต่ละเฟรม (O(1) Incremental Rendering)
+ * ช่วยให้เขียนด้วย Apple Pencil บน iPad ลื่นระดับ 120Hz โดยไม่ต้องวาดหน้า PDF ใหม่ทุกครั้งที่ขยับปากกา
+ */
+function renderIncrementalPenSegments(
+  ctx: CanvasRenderingContext2D,
+  stroke: PenStroke,
+  fromIndex: number,
+  mmToPx: number
+) {
+  const pts = stroke.points;
+  if (!pts || pts.length < 2) return;
+
+  ctx.save();
+  ctx.strokeStyle = stroke.color;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const basePx = Math.max(1.2, stroke.baseWidthMm * mmToPx);
+  const startIdx = Math.max(1, fromIndex);
+
+  for (let i = startIdx; i < pts.length; i++) {
+    const p0 = pts[i - 1];
+    const p1 = pts[i];
+    const pPrev = i >= 2 ? pts[i - 2] : p0;
+
+    const startX = i === 1 ? p0.xMm * mmToPx : ((pPrev.xMm + p0.xMm) / 2) * mmToPx;
+    const startY = i === 1 ? p0.yMm * mmToPx : ((pPrev.yMm + p0.yMm) / 2) * mmToPx;
+    const ctrlX = p0.xMm * mmToPx;
+    const ctrlY = p0.yMm * mmToPx;
+    const endX = ((p0.xMm + p1.xMm) / 2) * mmToPx;
+    const endY = ((p0.yMm + p1.yMm) / 2) * mmToPx;
+
+    const pressure = ((p0.p || 1) + (p1.p || 1)) / 2;
+    ctx.lineWidth = Math.max(0.9, basePx * pressure);
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.quadraticCurveTo(ctrlX, ctrlY, endX, endY);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
 async function normalizeSignatureToBlueTransparentDataUrl(srcUrl: string): Promise<string> {
   const img = new Image();
   img.crossOrigin = "anonymous";
@@ -435,9 +509,11 @@ export function DirectorStampCanvas({
   // ติ๊กโหมดปากกา iPad อัตโนมัติตลอดเวลา (Apple Pencil เขียนได้ทันที / นิ้วแตะเลื่อนหน้า / เมาส์ใช้งานได้ปกติ)
   const [ipadPencilOnly, setIpadPencilOnly] = useState(true);
   const [toolbarCollapseSignal, setToolbarCollapseSignal] = useState(0);
+  const isToolbarExpandedRef = useRef(false);
 
   // โหมดการใช้งานบนกระดาษ: "move-sig" = ย้ายลายเซ็น, "pen" = ปากกา, "highlighter" = ไฮไลต์, "eraser" = ยางลบ, "pan" = เลื่อนกระดาษ
   const [toolMode, setToolMode] = useState<PdfWorkspaceToolMode>("move-sig");
+  const toolModeRef = useRef<PdfWorkspaceToolMode>("move-sig");
   const [penColor, setPenColor] = useState("#dc2626");
   const [penBaseWidthMm, setPenBaseWidthMm] = useState(0.65);
   const [highlighterColor, setHighlighterColor] = useState("#facc15");
@@ -453,12 +529,29 @@ export function DirectorStampCanvas({
 
   const activeStrokeRef = useRef<PenStroke | null>(null);
   const activeStrokePageRef = useRef<number>(1);
+  const activeStrokePointerIdRef = useRef<number | null>(null);
+  const activeCanvasRectRef = useRef<{
+    page: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    pageH: number;
+  } | null>(null);
+  const highlighterBackdropRef = useRef<HTMLCanvasElement | null>(null);
+  const drawRafRef = useRef<number | null>(null);
+  const lastStylusTimeRef = useRef<number>(0);
+
   const eraseSessionRef = useRef<{
+    pointerId: number;
     page: number;
     initialStrokes: PenStroke[];
     changed: boolean;
   } | null>(null);
   const panStartRef = useRef<{
+    pointerId: number;
+    pointerType: string;
+    startedAt: number;
     clientX: number;
     clientY: number;
     scrollLeft: number;
@@ -469,6 +562,8 @@ export function DirectorStampCanvas({
   const [showDrawModal, setShowDrawModal] = useState(false);
   const sigPadStrokesRef = useRef<PenStroke[]>([]);
   const activeSigPadStrokeRef = useRef<PenStroke | null>(null);
+  const sigPadPointerIdRef = useRef<number | null>(null);
+  const sigPadRectRef = useRef<DOMRect | null>(null);
 
   const [signDateIso, setSignDateIso] = useState(() => {
     const d = new Date();
@@ -478,9 +573,13 @@ export function DirectorStampCanvas({
 
   const [layout, setLayout] = useState<SigLayoutState>(DEFAULT_SIG_LAYOUT);
   const layoutRef = useRef<SigLayoutState>(DEFAULT_SIG_LAYOUT);
-  const dragSigRef = useRef<{ id: string; page: number; dx: number; dy: number } | null>(
-    null
-  );
+  const dragSigRef = useRef<{
+    pointerId: number;
+    id: string;
+    page: number;
+    dx: number;
+    dy: number;
+  } | null>(null);
 
   const getPageHeightPx = useCallback((pNum: number) => {
     return pageHeightsRef.current[pNum] || defaultPageHeightRef.current;
@@ -489,6 +588,10 @@ export function DirectorStampCanvas({
   useEffect(() => {
     pageNumberRef.current = pageNumber;
   }, [pageNumber]);
+
+  useEffect(() => {
+    toolModeRef.current = toolMode;
+  }, [toolMode]);
 
   useEffect(() => {
     layoutRef.current = layout;
@@ -713,6 +816,15 @@ export function DirectorStampCanvas({
       pageHeightsRef.current = {};
       canvasRefs.current = {};
       pageSlotRefs.current = {};
+      strokesByPageRef.current = {};
+      setStrokesByPage({});
+      strokeHistoryRef.current = { past: [], future: [] };
+      setStrokeHistory({ past: [], future: [] });
+      activeStrokeRef.current = null;
+      activeStrokePointerIdRef.current = null;
+      eraseSessionRef.current = null;
+      panStartRef.current = null;
+      dragSigRef.current = null;
       setLoadingPdf(true);
       setPdfError(null);
       try {
@@ -882,7 +994,6 @@ export function DirectorStampCanvas({
     redrawAllVisibleCanvases();
   }, [
     layout,
-    strokesByPage,
     sigPlacements,
     selectedSigId,
     signDateIso,
@@ -986,6 +1097,9 @@ export function DirectorStampCanvas({
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);
       }
+      if (drawRafRef.current !== null) {
+        cancelAnimationFrame(drawRafRef.current);
+      }
     };
   }, []);
 
@@ -1031,6 +1145,8 @@ export function DirectorStampCanvas({
           pageNumber: pNum,
           overlayPngDataUrl: off.toDataURL("image/png"),
         });
+        off.width = 0;
+        off.height = 0;
       }
 
       return {
@@ -1104,17 +1220,35 @@ export function DirectorStampCanvas({
     redrawPageCanvas(targetPage);
   };
 
+  const cachePageCanvasRect = (targetPage: number) => {
+    const cv = canvasRefs.current[targetPage];
+    if (!cv) return null;
+    const rect = cv.getBoundingClientRect();
+    const pageH = getPageHeightPx(targetPage);
+    const cached = {
+      page: targetPage,
+      left: rect.left,
+      top: rect.top,
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height),
+      pageH,
+    };
+    activeCanvasRectRef.current = cached;
+    return cached;
+  };
+
   const clientCoordsToMm = (
     clientX: number,
     clientY: number,
     targetPage: number
   ): [number, number] => {
-    const cv = canvasRefs.current[targetPage];
-    if (!cv) return [0, 0];
-    const rect = cv.getBoundingClientRect();
-    const pageH = getPageHeightPx(targetPage);
-    const xMm = ((clientX - rect.left) / Math.max(1, rect.width)) * 210;
-    const yMm = ((clientY - rect.top) / Math.max(1, rect.height)) * (pageH / MM_TO_PX);
+    const cached =
+      activeCanvasRectRef.current?.page === targetPage
+        ? activeCanvasRectRef.current
+        : cachePageCanvasRect(targetPage);
+    if (!cached) return [0, 0];
+    const xMm = ((clientX - cached.left) / cached.width) * 210;
+    const yMm = ((clientY - cached.top) / cached.height) * (cached.pageH / MM_TO_PX);
     return [xMm, yMm];
   };
 
@@ -1132,6 +1266,14 @@ export function DirectorStampCanvas({
     setStrokeHistory(nextHistory);
   }, []);
 
+  const scheduleSinglePageRedraw = (targetPage: number) => {
+    if (drawRafRef.current !== null) return;
+    drawRafRef.current = requestAnimationFrame(() => {
+      drawRafRef.current = null;
+      redrawPageCanvas(targetPage);
+    });
+  };
+
   const eraseStrokesAtPoint = (xMm: number, yMm: number, targetPage: number) => {
     const curList = strokesByPageRef.current[targetPage] || [];
     if (curList.length === 0) return;
@@ -1141,11 +1283,18 @@ export function DirectorStampCanvas({
     if (remaining.length !== curList.length) {
       const nextMap = { ...strokesByPageRef.current, [targetPage]: remaining };
       strokesByPageRef.current = nextMap;
-      setStrokesByPage(nextMap);
       if (eraseSessionRef.current) {
         eraseSessionRef.current.changed = true;
       }
-      redrawPageCanvas(targetPage);
+      scheduleSinglePageRedraw(targetPage);
+    }
+  };
+
+  const safeSetPointerCapture = (el: HTMLCanvasElement, pointerId: number) => {
+    try {
+      el.setPointerCapture(pointerId);
+    } catch {
+      // ignore on iOS Safari when pointer is already released/synthetic
     }
   };
 
@@ -1153,32 +1302,70 @@ export function DirectorStampCanvas({
     e: React.PointerEvent<HTMLCanvasElement>,
     targetPage: number
   ) => {
+    const now = performance.now();
     const isStylus = e.pointerType === "pen";
     const isFingerTouch = e.pointerType === "touch";
+    const currentTool = toolModeRef.current;
     const isDrawOrEraseTool =
-      toolMode === "pen" || toolMode === "highlighter" || toolMode === "eraser";
+      currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser";
+
+    if (isStylus) {
+      lastStylusTimeRef.current = now;
+      // หากฝ่ามือแตะหน้าจอก่อนหน้าปากกาเสี้ยววินาที ให้ยกเลิกการเลื่อนหน้าของฝ่ามือแล้วคืนตำแหน่งเดิมทันที
+      if (panStartRef.current && panStartRef.current.pointerType === "touch") {
+        if (now - panStartRef.current.startedAt < 450 && scrollContainerRef.current) {
+          scrollContainerRef.current.scrollLeft = panStartRef.current.scrollLeft;
+          scrollContainerRef.current.scrollTop = panStartRef.current.scrollTop;
+        }
+        panStartRef.current = null;
+      }
+    } else if (isFingerTouch) {
+      // หากกำลังเขียน ลบ หรือลากลายเซ็นอยู่ ให้เพิกเฉยต่อการแตะของฝ่ามือหรือนิ้วอื่นทั้งหมด
+      if (
+        activeStrokeRef.current ||
+        eraseSessionRef.current ||
+        dragSigRef.current
+      ) {
+        return;
+      }
+
+      // ป้องกันฝ่ามือ (Palm Rejection) เลื่อนกระดาษเองระหว่างยกหัวปากกาเขียนตัวอักษรไทยตัวถัดไป
+      const isWidePalmContact = (e.width && e.width > 34) || (e.height && e.height > 34);
+      const recentlyUsedStylus = now - lastStylusTimeRef.current < 950;
+      if (currentTool !== "pan" && isDrawOrEraseTool && (recentlyUsedStylus || isWidePalmContact)) {
+        return;
+      }
+    }
 
     // กรณีอยู่ในโหมดเลื่อนกระดาษ (pan) หรือเปิดโหมด iPad (ใช้นิ้วเลื่อน / ใช้ปากกาเขียน) แล้วแตะด้วยนิ้ว
-    if (toolMode === "pan" || (isDrawOrEraseTool && ipadPencilOnly && isFingerTouch)) {
+    if (currentTool === "pan" || (isDrawOrEraseTool && ipadPencilOnly && isFingerTouch)) {
       const container = scrollContainerRef.current;
       if (!container) return;
       panStartRef.current = {
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        startedAt: now,
         clientX: e.clientX,
         clientY: e.clientY,
         scrollLeft: container.scrollLeft,
         scrollTop: container.scrollTop,
       };
-      e.currentTarget.setPointerCapture(e.pointerId);
+      safeSetPointerCapture(e.currentTarget, e.pointerId);
       return;
     }
 
+    cachePageCanvasRect(targetPage);
     const [x, y] = clientCoordsToMm(e.clientX, e.clientY, targetPage);
 
     // โหมดยางลบ (ลบทั้งลายเส้นเมื่อแตะหรือลากผ่าน)
-    if (toolMode === "eraser") {
-      setToolbarCollapseSignal((n) => n + 1);
-      e.currentTarget.setPointerCapture(e.pointerId);
+    if (currentTool === "eraser") {
+      e.preventDefault();
+      if (isToolbarExpandedRef.current) {
+        setToolbarCollapseSignal((n) => n + 1);
+      }
+      safeSetPointerCapture(e.currentTarget, e.pointerId);
       eraseSessionRef.current = {
+        pointerId: e.pointerId,
         page: targetPage,
         initialStrokes: [...(strokesByPageRef.current[targetPage] || [])],
         changed: false,
@@ -1188,28 +1375,52 @@ export function DirectorStampCanvas({
     }
 
     // โหมดปากกา / ไฮไลต์ (หรือแตะด้วย Apple Pencil แล้วเปลี่ยนเป็นเขียนอัตโนมัติ)
-    if (toolMode === "pen" || toolMode === "highlighter" || isStylus) {
-      setToolbarCollapseSignal((n) => n + 1);
+    if (currentTool === "pen" || currentTool === "highlighter" || isStylus) {
+      e.preventDefault();
+      if (isToolbarExpandedRef.current) {
+        setToolbarCollapseSignal((n) => n + 1);
+      }
       const activeTool: "pen" | "highlighter" =
-        toolMode === "highlighter" ? "highlighter" : "pen";
-      if (isStylus && toolMode !== "pen" && toolMode !== "highlighter") {
+        currentTool === "highlighter" ? "highlighter" : "pen";
+      if (isStylus && currentTool !== "pen" && currentTool !== "highlighter") {
+        toolModeRef.current = "pen";
         setToolMode("pen");
       }
-      e.currentTarget.setPointerCapture(e.pointerId);
-      activeStrokePageRef.current = targetPage;
-      const now = performance.now();
+
       const p =
         activeTool === "highlighter"
           ? 1
           : computePointPressure(e.pointerType, e.pressure, undefined, x, y, now);
-      activeStrokeRef.current = {
+      const newStroke: PenStroke = {
         color: activeTool === "highlighter" ? highlighterColor : penColor,
         baseWidthMm: activeTool === "highlighter" ? highlighterWidthMm : penBaseWidthMm,
         points: [{ xMm: x, yMm: y, p, t: now }],
         tool: activeTool,
         opacity: activeTool === "highlighter" ? 0.34 : undefined,
       };
-      redrawPageCanvas(targetPage);
+
+      activeStrokePageRef.current = targetPage;
+      activeStrokePointerIdRef.current = e.pointerId;
+      activeStrokeRef.current = newStroke;
+      safeSetPointerCapture(e.currentTarget, e.pointerId);
+
+      const cv = canvasRefs.current[targetPage];
+      const ctx = cv?.getContext("2d");
+      if (cv && ctx) {
+        if (activeTool === "highlighter") {
+          let backdrop = highlighterBackdropRef.current;
+          if (!backdrop) {
+            backdrop = document.createElement("canvas");
+            highlighterBackdropRef.current = backdrop;
+          }
+          if (backdrop.width !== cv.width) backdrop.width = cv.width;
+          if (backdrop.height !== cv.height) backdrop.height = cv.height;
+          const bCtx = backdrop.getContext("2d");
+          bCtx?.clearRect(0, 0, backdrop.width, backdrop.height);
+          bCtx?.drawImage(cv, 0, 0);
+        }
+        renderPenStrokeDot(ctx, newStroke, MM_TO_PX);
+      }
       return;
     }
 
@@ -1226,15 +1437,17 @@ export function DirectorStampCanvas({
           y >= sig.y - 6 &&
           y <= sig.y + sig.h + 6
         ) {
+          e.preventDefault();
           selectedSigIdRef.current = sig.id;
           setSelectedSigId(sig.id);
           dragSigRef.current = {
+            pointerId: e.pointerId,
             id: sig.id,
             page: targetPage,
             dx: x - sig.x,
             dy: y - sig.y,
           };
-          e.currentTarget.setPointerCapture(e.pointerId);
+          safeSetPointerCapture(e.currentTarget, e.pointerId);
           redrawPageCanvas(targetPage);
           return;
         }
@@ -1245,54 +1458,40 @@ export function DirectorStampCanvas({
     const container = scrollContainerRef.current;
     if (!container) return;
     panStartRef.current = {
+      pointerId: e.pointerId,
+      pointerType: e.pointerType,
+      startedAt: now,
       clientX: e.clientX,
       clientY: e.clientY,
       scrollLeft: container.scrollLeft,
       scrollTop: container.scrollTop,
     };
-    e.currentTarget.setPointerCapture(e.pointerId);
+    safeSetPointerCapture(e.currentTarget, e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (panStartRef.current) {
-      const container = scrollContainerRef.current;
-      if (container) {
-        container.scrollLeft =
-          panStartRef.current.scrollLeft - (e.clientX - panStartRef.current.clientX);
-        container.scrollTop =
-          panStartRef.current.scrollTop - (e.clientY - panStartRef.current.clientY);
-      }
-      return;
+    if (e.pointerType === "pen") {
+      lastStylusTimeRef.current = performance.now();
     }
 
-    if (eraseSessionRef.current) {
-      const targetPage = eraseSessionRef.current.page;
-      const coalesced: PointerEvent[] =
-        typeof (e.nativeEvent as any).getCoalescedEvents === "function"
-          ? (e.nativeEvent as any).getCoalescedEvents()
-          : [e.nativeEvent];
-      for (const ev of coalesced) {
-        const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY, targetPage);
-        eraseStrokesAtPoint(cx, cy, targetPage);
-      }
-      return;
-    }
-
+    // 1. วาดเส้นปากกา / ไฮไลต์ (ตรวจสอบ pointerId เพื่อกันฝ่ามือแทรกกลางคัน)
     if (activeStrokeRef.current) {
+      if (e.pointerId !== activeStrokePointerIdRef.current) return;
       const targetPage = activeStrokePageRef.current;
       const stroke = activeStrokeRef.current;
+      const prevLen = stroke.points.length;
       const coalesced: PointerEvent[] =
         typeof (e.nativeEvent as any).getCoalescedEvents === "function"
           ? (e.nativeEvent as any).getCoalescedEvents()
           : [e.nativeEvent];
 
+      const now = performance.now();
       for (const ev of coalesced) {
         const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY, targetPage);
         const lastPt = stroke.points[stroke.points.length - 1];
-        if (lastPt && Math.hypot(cx - lastPt.xMm, cy - lastPt.yMm) < 0.08) {
+        if (lastPt && Math.hypot(cx - lastPt.xMm, cy - lastPt.yMm) < 0.14) {
           continue;
         }
-        const now = performance.now();
         const p =
           stroke.tool === "highlighter"
             ? 1
@@ -1307,47 +1506,93 @@ export function DirectorStampCanvas({
         stroke.points.push({ xMm: cx, yMm: cy, p, t: now });
       }
 
-      redrawPageCanvas(targetPage);
-      return;
-    }
+      if (stroke.points.length === prevLen) return;
 
-    if (!dragSigRef.current) return;
-    const { id: sigId, page: sigTargetPage, dx, dy } = dragSigRef.current;
-    const [x, y] = clientCoordsToMm(e.clientX, e.clientY, sigTargetPage);
-    const nextX = Math.max(2, Math.min(195, x - dx));
-    const nextY = Math.max(2, Math.min(285, y - dy));
+      const cv = canvasRefs.current[targetPage];
+      const ctx = cv?.getContext("2d");
+      if (!cv || !ctx) return;
 
-    const updatedList = sigPlacementsRef.current.map((s) =>
-      s.id === sigId ? { ...s, x: nextX, y: nextY } : s
-    );
-    sigPlacementsRef.current = updatedList;
-    setSigPlacements(updatedList);
-  };
-
-  const handlePointerUp = () => {
-    if (panStartRef.current) {
-      panStartRef.current = null;
-      return;
-    }
-
-    if (eraseSessionRef.current) {
-      const sess = eraseSessionRef.current;
-      eraseSessionRef.current = null;
-      if (sess.changed) {
-        const afterList = strokesByPageRef.current[sess.page] || [];
-        commitHistoryEntry({
-          page: sess.page,
-          prev: sess.initialStrokes,
-          next: afterList,
-        });
+      if (stroke.tool === "highlighter") {
+        if (drawRafRef.current === null) {
+          drawRafRef.current = requestAnimationFrame(() => {
+            drawRafRef.current = null;
+            const curStroke = activeStrokeRef.current;
+            const curCv = canvasRefs.current[targetPage];
+            const curCtx = curCv?.getContext("2d");
+            const backdrop = highlighterBackdropRef.current;
+            if (curStroke && curCv && curCtx && backdrop && backdrop.width > 0) {
+              curCtx.clearRect(0, 0, curCv.width, curCv.height);
+              curCtx.drawImage(backdrop, 0, 0);
+              renderPressureStroke(curCtx, curStroke, MM_TO_PX);
+            }
+          });
+        }
+      } else {
+        // O(1) วาดเฉพาะเส้นส่วนที่เพิ่งเพิ่มเข้ามาโดยตรง ไม่ต้องล้างหน้า PDF ทั้งแผ่น
+        renderIncrementalPenSegments(ctx, stroke, prevLen, MM_TO_PX);
       }
       return;
     }
 
-    if (activeStrokeRef.current) {
+    // 2. โหมดยางลบ
+    if (eraseSessionRef.current) {
+      if (e.pointerId !== eraseSessionRef.current.pointerId) return;
+      const targetPage = eraseSessionRef.current.page;
+      const coalesced: PointerEvent[] =
+        typeof (e.nativeEvent as any).getCoalescedEvents === "function"
+          ? (e.nativeEvent as any).getCoalescedEvents()
+          : [e.nativeEvent];
+      for (const ev of coalesced) {
+        const [cx, cy] = clientCoordsToMm(ev.clientX, ev.clientY, targetPage);
+        eraseStrokesAtPoint(cx, cy, targetPage);
+      }
+      return;
+    }
+
+    // 3. โหมดลากย้ายกรอบลายเซ็น
+    if (dragSigRef.current) {
+      if (e.pointerId !== dragSigRef.current.pointerId) return;
+      const { id: sigId, page: sigTargetPage, dx, dy } = dragSigRef.current;
+      const [x, y] = clientCoordsToMm(e.clientX, e.clientY, sigTargetPage);
+      const nextX = Math.max(2, Math.min(195, x - dx));
+      const nextY = Math.max(2, Math.min(285, y - dy));
+
+      sigPlacementsRef.current = sigPlacementsRef.current.map((s) =>
+        s.id === sigId ? { ...s, x: nextX, y: nextY } : s
+      );
+      scheduleSinglePageRedraw(sigTargetPage);
+      return;
+    }
+
+    // 4. โหมดเลื่อนกระดาษ (pan)
+    if (panStartRef.current) {
+      if (e.pointerId !== panStartRef.current.pointerId) return;
+      const container = scrollContainerRef.current;
+      if (container) {
+        container.scrollLeft =
+          panStartRef.current.scrollLeft - (e.clientX - panStartRef.current.clientX);
+        container.scrollTop =
+          panStartRef.current.scrollTop - (e.clientY - panStartRef.current.clientY);
+      }
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === "pen") {
+      lastStylusTimeRef.current = performance.now();
+    }
+
+    if (activeStrokeRef.current && e.pointerId === activeStrokePointerIdRef.current) {
+      if (drawRafRef.current !== null) {
+        cancelAnimationFrame(drawRafRef.current);
+        drawRafRef.current = null;
+      }
       const finished = activeStrokeRef.current;
       const targetPage = activeStrokePageRef.current;
       activeStrokeRef.current = null;
+      activeStrokePointerIdRef.current = null;
+      activeCanvasRectRef.current = null;
+
       const prevList = strokesByPageRef.current[targetPage] || [];
       const nextList = [...prevList, finished];
       const nextMap = { ...strokesByPageRef.current, [targetPage]: nextList };
@@ -1366,9 +1611,28 @@ export function DirectorStampCanvas({
       return;
     }
 
-    if (dragSigRef.current) {
-      const draggedId = dragSigRef.current.id;
+    if (eraseSessionRef.current && e.pointerId === eraseSessionRef.current.pointerId) {
+      const sess = eraseSessionRef.current;
+      eraseSessionRef.current = null;
+      activeCanvasRectRef.current = null;
+      if (sess.changed) {
+        const afterList = strokesByPageRef.current[sess.page] || [];
+        setStrokesByPage({ ...strokesByPageRef.current });
+        commitHistoryEntry({
+          page: sess.page,
+          prev: sess.initialStrokes,
+          next: afterList,
+        });
+        redrawPageCanvas(sess.page);
+      }
+      return;
+    }
+
+    if (dragSigRef.current && e.pointerId === dragSigRef.current.pointerId) {
+      const { id: draggedId, page: sigPage } = dragSigRef.current;
       dragSigRef.current = null;
+      activeCanvasRectRef.current = null;
+      setSigPlacements([...sigPlacementsRef.current]);
       const movedSig = sigPlacementsRef.current.find((s) => s.id === draggedId);
       if (movedSig) {
         const nextLayout = {
@@ -1382,6 +1646,12 @@ export function DirectorStampCanvas({
       } else {
         saveLayoutToStorage(layoutRef.current);
       }
+      redrawPageCanvas(sigPage);
+      return;
+    }
+
+    if (panStartRef.current && e.pointerId === panStartRef.current.pointerId) {
+      panStartRef.current = null;
     }
   };
 
@@ -1468,43 +1738,79 @@ export function DirectorStampCanvas({
   const startDrawSig = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const cv = drawPadRef.current;
     if (!cv) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (e.pointerType === "touch") {
+      if (activeSigPadStrokeRef.current) return;
+      if ((e.width && e.width > 34) || (e.height && e.height > 34)) return;
+    }
+    e.preventDefault();
+    safeSetPointerCapture(e.currentTarget, e.pointerId);
     const rect = cv.getBoundingClientRect();
+    sigPadRectRef.current = rect;
+    sigPadPointerIdRef.current = e.pointerId;
     const xMm = ((e.clientX - rect.left) / Math.max(1, rect.width)) * (cv.width / 4);
     const yMm = ((e.clientY - rect.top) / Math.max(1, rect.height)) * (cv.height / 4);
     const now = performance.now();
     const p = computePointPressure(e.pointerType, e.pressure, undefined, xMm, yMm, now);
-    activeSigPadStrokeRef.current = {
+    const newStroke: PenStroke = {
       color: BLUE_INK,
       baseWidthMm: 0.9,
       points: [{ xMm, yMm, p, t: now }],
     };
-    renderSigPadCanvas();
+    activeSigPadStrokeRef.current = newStroke;
+    const ctx = cv.getContext("2d");
+    if (ctx) {
+      renderPenStrokeDot(ctx, newStroke, 4);
+    }
   };
 
   const moveDrawSig = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const cv = drawPadRef.current;
     const stroke = activeSigPadStrokeRef.current;
-    if (!cv || !stroke) return;
-    const rect = cv.getBoundingClientRect();
-    const xMm = ((e.clientX - rect.left) / Math.max(1, rect.width)) * (cv.width / 4);
-    const yMm = ((e.clientY - rect.top) / Math.max(1, rect.height)) * (cv.height / 4);
-    const lastPt = stroke.points[stroke.points.length - 1];
+    if (!cv || !stroke || e.pointerId !== sigPadPointerIdRef.current) return;
+    const rect = sigPadRectRef.current || cv.getBoundingClientRect();
+    const prevLen = stroke.points.length;
+    const coalesced: PointerEvent[] =
+      typeof (e.nativeEvent as any).getCoalescedEvents === "function"
+        ? (e.nativeEvent as any).getCoalescedEvents()
+        : [e.nativeEvent];
+
     const now = performance.now();
-    const p = computePointPressure(e.pointerType, e.pressure, lastPt, xMm, yMm, now);
-    stroke.points.push({ xMm, yMm, p, t: now });
-    renderSigPadCanvas();
+    for (const ev of coalesced) {
+      const xMm = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * (cv.width / 4);
+      const yMm = ((ev.clientY - rect.top) / Math.max(1, rect.height)) * (cv.height / 4);
+      const lastPt = stroke.points[stroke.points.length - 1];
+      if (lastPt && Math.hypot(xMm - lastPt.xMm, yMm - lastPt.yMm) < 0.12) continue;
+      const p = computePointPressure(
+        ev.pointerType || e.pointerType,
+        ev.pressure ?? e.pressure,
+        lastPt,
+        xMm,
+        yMm,
+        now
+      );
+      stroke.points.push({ xMm, yMm, p, t: now });
+    }
+
+    if (stroke.points.length > prevLen) {
+      const ctx = cv.getContext("2d");
+      if (ctx) {
+        renderIncrementalPenSegments(ctx, stroke, prevLen, 4);
+      }
+    }
   };
 
-  const endDrawSig = () => {
-    if (activeSigPadStrokeRef.current) {
-      sigPadStrokesRef.current = [
-        ...sigPadStrokesRef.current,
-        activeSigPadStrokeRef.current,
-      ];
-      activeSigPadStrokeRef.current = null;
-      renderSigPadCanvas();
+  const endDrawSig = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!activeSigPadStrokeRef.current || e.pointerId !== sigPadPointerIdRef.current) {
+      return;
     }
+    sigPadStrokesRef.current = [
+      ...sigPadStrokesRef.current,
+      activeSigPadStrokeRef.current,
+    ];
+    activeSigPadStrokeRef.current = null;
+    sigPadPointerIdRef.current = null;
+    sigPadRectRef.current = null;
+    renderSigPadCanvas();
   };
 
   const saveDrawnSig = () => {
@@ -1523,6 +1829,8 @@ export function DirectorStampCanvas({
   const clearDrawnPad = () => {
     sigPadStrokesRef.current = [];
     activeSigPadStrokeRef.current = null;
+    sigPadPointerIdRef.current = null;
+    sigPadRectRef.current = null;
     renderSigPadCanvas();
   };
 
@@ -1614,7 +1922,11 @@ export function DirectorStampCanvas({
           {shouldMountCanvas ? (
             <canvas
               ref={(el) => {
+                const prev = canvasRefs.current[pNum];
                 canvasRefs.current[pNum] = el;
+                if (el && prev !== el && baseCanvasesRef.current.has(pNum)) {
+                  redrawPageCanvas(pNum);
+                }
               }}
               width={CANVAS_W}
               height={pageH}
@@ -1622,6 +1934,13 @@ export function DirectorStampCanvas({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
+              onContextMenu={(e) => e.preventDefault()}
+              style={{
+                touchAction: "none",
+                WebkitUserSelect: "none",
+                userSelect: "none",
+                WebkitTouchCallout: "none",
+              }}
               className={`w-full h-full block touch-none select-none ${
                 toolMode === "pen" || toolMode === "highlighter" || toolMode === "eraser"
                   ? "cursor-crosshair"
@@ -2274,6 +2593,9 @@ export function DirectorStampCanvas({
               ipadPencilOnly={ipadPencilOnly}
               onIpadPencilOnlyChange={setIpadPencilOnly}
               collapseSignal={toolbarCollapseSignal}
+              onExpandedChange={(exp) => {
+                isToolbarExpandedRef.current = exp;
+              }}
             />
           </div>
         )}
@@ -2303,7 +2625,14 @@ export function DirectorStampCanvas({
               onPointerMove={moveDrawSig}
               onPointerUp={endDrawSig}
               onPointerCancel={endDrawSig}
-              className="w-full h-[180px] rounded-xl border-2 border-dashed border-indigo-200 bg-slate-50/50 cursor-crosshair touch-none"
+              onContextMenu={(e) => e.preventDefault()}
+              style={{
+                touchAction: "none",
+                WebkitUserSelect: "none",
+                userSelect: "none",
+                WebkitTouchCallout: "none",
+              }}
+              className="w-full h-[180px] rounded-xl border-2 border-dashed border-indigo-200 bg-slate-50/50 cursor-crosshair touch-none select-none"
             />
             <div className="flex justify-end gap-2 pt-1">
               <button

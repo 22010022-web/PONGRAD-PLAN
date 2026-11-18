@@ -62,6 +62,7 @@ interface FloatingRadialToolbarProps {
   ipadPencilOnly: boolean;
   onIpadPencilOnlyChange: (enabled: boolean) => void;
   collapseSignal?: number;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 const COLLAPSED_SIZE = 52;
@@ -99,10 +100,15 @@ export function FloatingRadialToolbar({
   ipadPencilOnly,
   onIpadPencilOnlyChange,
   collapseSignal = 0,
+  onExpandedChange,
 }: FloatingRadialToolbarProps) {
   const [expanded, setExpanded] = useState(false);
   const [subPanel, setSubPanel] = useState<"color" | "size" | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 760, height: 560 });
+
+  useEffect(() => {
+    onExpandedChange?.(expanded);
+  }, [expanded, onExpandedChange]);
 
   // ตำแหน่งศูนย์กลางของปุ่มแบบสัมพันธ์กับพื้นที่ PDF (ขอบขวาเป็นค่าเริ่มต้น)
   const [normPos, setNormPos] = useState<{
@@ -219,7 +225,11 @@ export function FloatingRadialToolbar({
 
   const beginDrag = (e: React.PointerEvent<HTMLElement>) => {
     e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore pointer capture error on iOS Safari
+    }
     dragStateRef.current = {
       pointerId: e.pointerId,
       startClientX: e.clientX,
