@@ -1586,6 +1586,54 @@ export function DirectorStampCanvas({
     cachePageCanvasRect(targetPage);
     const [x, y] = clientCoordsToMm(e.clientX, e.clientY, targetPage);
 
+    const tryBeginSignatureDrag = (): boolean => {
+      const cur = layoutRef.current;
+      if (!cur.showSignatureOnDoc) return false;
+      const pageSigs = sigPlacementsRef.current.filter(
+        (s) => s.pageNumber === targetPage
+      );
+      for (let i = pageSigs.length - 1; i >= 0; i--) {
+        const sig = pageSigs[i];
+        if (
+          x >= sig.x - 6 &&
+          x <= sig.x + sig.w + 6 &&
+          y >= sig.y - 6 &&
+          y <= sig.y + sig.h + 6
+        ) {
+          e.preventDefault();
+          selectedSigIdRef.current = sig.id;
+          setSelectedSigId(sig.id);
+          dragSigRef.current = {
+            pointerId: e.pointerId,
+            id: sig.id,
+            page: targetPage,
+            dx: x - sig.x,
+            dy: y - sig.y,
+          };
+          safeSetPointerCapture(e.currentTarget, e.pointerId);
+          redrawPageCanvas(targetPage);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // หากอยู่ในโหมดย้ายลายเซ็นหรือโหมดเลือก ให้ตรวจสอบการจับย้ายลายเซ็นและรูปทรงก่อนเสมอ (แม้ใช้ Apple Pencil)
+    if (currentTool === "move-sig") {
+      if (tryBeginSignatureDrag()) {
+        if (isToolbarExpandedRef.current) {
+          setToolbarCollapseSignal((n) => n + 1);
+        }
+        return;
+      }
+      if (tryBeginShapeTransform(e, targetPage, x, y)) {
+        if (isToolbarExpandedRef.current) {
+          setToolbarCollapseSignal((n) => n + 1);
+        }
+        return;
+      }
+    }
+
     // หากมีรูปทรงที่กำลังถูกเลือกอยู่และแตะโดนจุดจับปรับขนาด/หมุนของรูปทรงนั้น ให้ปรับรูปทรงได้ทันที
     if (
       currentTool === "select" ||
@@ -1596,6 +1644,9 @@ export function DirectorStampCanvas({
         if (isToolbarExpandedRef.current) {
           setToolbarCollapseSignal((n) => n + 1);
         }
+        return;
+      }
+      if (currentTool === "select" && tryBeginSignatureDrag()) {
         return;
       }
       if (currentTool === "select" && selectedShapeLocRef.current) {
@@ -1676,7 +1727,7 @@ export function DirectorStampCanvas({
       return;
     }
 
-    // โหมดปากกา / เน้นข้อความ / ดินสอ (หรือแตะด้วย Apple Pencil ในโหมดลายเซ็น/เลื่อนหน้า)
+    // โหมดปากกา / เน้นข้อความ / ดินสอ (หรือแตะด้วย Apple Pencil นอกกรอบลายเซ็น)
     if (
       currentTool === "pen" ||
       currentTool === "highlighter" ||
@@ -1752,39 +1803,12 @@ export function DirectorStampCanvas({
       return;
     }
 
-    // โหมดเลือก: ตรวจสอบว่าแตะโดนรูปทรงหรือไม่
     if (tryBeginShapeTransform(e, targetPage, x, y)) {
       return;
     }
 
-    const cur = layoutRef.current;
-    if (cur.showSignatureOnDoc) {
-      const pageSigs = sigPlacementsRef.current.filter(
-        (s) => s.pageNumber === targetPage
-      );
-      for (let i = pageSigs.length - 1; i >= 0; i--) {
-        const sig = pageSigs[i];
-        if (
-          x >= sig.x - 6 &&
-          x <= sig.x + sig.w + 6 &&
-          y >= sig.y - 6 &&
-          y <= sig.y + sig.h + 6
-        ) {
-          e.preventDefault();
-          selectedSigIdRef.current = sig.id;
-          setSelectedSigId(sig.id);
-          dragSigRef.current = {
-            pointerId: e.pointerId,
-            id: sig.id,
-            page: targetPage,
-            dx: x - sig.x,
-            dy: y - sig.y,
-          };
-          safeSetPointerCapture(e.currentTarget, e.pointerId);
-          redrawPageCanvas(targetPage);
-          return;
-        }
-      }
+    if (tryBeginSignatureDrag()) {
+      return;
     }
 
     // นอกกรอบลายเซ็น/รูปทรง: ให้ลากเลื่อนกระดาษได้
@@ -2663,13 +2687,13 @@ export function DirectorStampCanvas({
     <div
       className={
         isFullscreenWorkspace
-          ? "fixed inset-2 z-[55] bg-slate-100 rounded-3xl p-2.5 sm:p-3.5 shadow-2xl border border-slate-300 grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch overflow-hidden"
-          : "grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch flex-1 min-h-0 overflow-hidden"
+          ? "fixed inset-2 z-[55] bg-slate-100 rounded-3xl p-2.5 sm:p-3.5 shadow-2xl border border-slate-300 grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch overflow-y-auto md:overflow-hidden"
+          : "grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch flex-1 min-h-0 overflow-y-auto md:overflow-hidden"
       }
     >
       {/* ฝั่งซ้าย: แถบตั้งค่าลายเซ็น & หมายเหตุ (พับเก็บได้เพื่อขยายจอ PDF ให้ใหญ่เต็มตา) */}
       {!sidebarCollapsed && (
-        <div className="lg:col-span-4 xl:col-span-3 space-y-2.5 bg-slate-50/90 p-2.5 sm:p-3 rounded-2xl border border-slate-200 lg:h-full lg:overflow-y-auto">
+        <div className="md:col-span-4 xl:col-span-3 space-y-2.5 bg-slate-50/90 p-2.5 sm:p-3 rounded-2xl border border-slate-200 md:h-full md:overflow-y-auto">
           {/* สลับโหมดด่วนบนหน้ากระดาษ + ลิงก์เครื่องมือลอย */}
           <div className="p-2.5 rounded-xl bg-white border border-slate-200/80 space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -3032,8 +3056,8 @@ export function DirectorStampCanvas({
       {/* ฝั่งขวา: ตัวอย่างหน้ากระดาษ PDF ขนาดใหญ่เต็มตา พร้อม Floating Radial Toolbar สไตล์ iPad */}
       <div
         className={`${
-          sidebarCollapsed ? "lg:col-span-12" : "lg:col-span-8 xl:col-span-9"
-        } flex flex-col items-center space-y-2 bg-slate-200/80 p-2 sm:p-2.5 rounded-2xl border border-slate-300 lg:h-full lg:min-h-0`}
+          sidebarCollapsed ? "md:col-span-12" : "md:col-span-8 xl:col-span-9"
+        } flex flex-col items-center space-y-2 bg-slate-200/80 p-2 sm:p-2.5 rounded-2xl border border-slate-300 md:h-full md:min-h-0`}
       >
         {/* แถบเครื่องมือด้านบน: ซ่อน/แสดงแถบซ้าย + พิมพ์เลขหน้า + โหมดอ่านต่อเนื่อง/ทีละหน้า + ซูม */}
         <div className="shrink-0 w-full bg-white px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl shadow-xs space-y-1.5">
@@ -3048,7 +3072,7 @@ export function DirectorStampCanvas({
                     ? "แสดงแถบลายเซ็นและหมายเหตุ"
                     : "ซ่อนแถบซ้ายเพื่อดูหน้ากระดาษ PDF ใหญ่ขึ้น"
                 }
-                className={`hidden lg:inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[11px] font-bold mr-1 transition-colors ${
+                className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[11px] font-bold mr-1 transition-colors ${
                   sidebarCollapsed
                     ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"

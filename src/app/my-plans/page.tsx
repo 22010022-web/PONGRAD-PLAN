@@ -25,7 +25,7 @@ import {
 } from "@/lib/plan-ordering";
 
 export default function MyPlansPage() {
-  const { user, isAdmin } = useAuth();
+  const { user, profile, teacher, isAdmin } = useAuth();
   const [plans, setPlans] = useState<LessonPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filterSubject, setFilterSubject] = useState("");
@@ -59,12 +59,22 @@ export default function MyPlansPage() {
   const loadMyPlans = async () => {
     if (!user) return;
     try {
-      const { data, error } = await supabase
+      const linkedTeacherId = profile?.teacher_id || teacher?.id || null;
+      const hasLinkedTeacherRow = Boolean(
+        linkedTeacherId && !linkedTeacherId.startsWith("00000000-")
+      );
+      let query = supabase
         .from("lesson_plans")
         .select("*, reviews:plan_reviews(*)")
-        .eq("created_by", user.id)
         .order("created_at", { ascending: false });
 
+      if (hasLinkedTeacherRow && linkedTeacherId) {
+        query = query.or(`created_by.eq.${user.id},teacher_id.eq.${linkedTeacherId}`);
+      } else {
+        query = query.eq("created_by", user.id);
+      }
+
+      const { data } = await query;
       if (data) setPlans(data as LessonPlan[]);
     } catch (err) {
       console.error("Error loading my plans:", err);
@@ -75,7 +85,7 @@ export default function MyPlansPage() {
 
   useEffect(() => {
     loadMyPlans();
-  }, [user]);
+  }, [user, profile?.teacher_id, teacher?.id]);
 
   const handlePostFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

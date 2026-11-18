@@ -109,6 +109,19 @@ export default function ReviewPage() {
       // ประทับลายมือเขียนแก้ไขและลายเซ็น ผอ. ลงบนไฟล์ PDF แล้วบันทึกลง Google Drive
       if (stampOntoPdf && overlayExporterRef.current) {
         const exported = overlayExporterRef.current();
+        if (
+          (!exported?.overlays || exported.overlays.length === 0) &&
+          isPermissionMemoPlan(selectedPlan) &&
+          statusAssigned === "เสร็จสมบูรณ์"
+        ) {
+          const ok = window.confirm(
+            "ยังไม่ได้วางลายเซ็น ผอ. หรือเขียนลงบนใบขออนุญาตใช้แผน\nต้องการบันทึกอนุมัติโดยไม่ประทับลายเซ็นลงในไฟล์ PDF หรือไม่?"
+          );
+          if (!ok) {
+            setIsSubmitting(false);
+            return;
+          }
+        }
         if (exported?.overlays && exported.overlays.length > 0) {
           setMsg({
             type: "success",
